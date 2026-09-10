@@ -2,8 +2,13 @@ package dev.rokerato.foldprobe
 
 import android.content.ClipData
 import android.content.ClipboardManager
+import android.hardware.Sensor
+import android.hardware.SensorEvent
+import android.hardware.SensorEventListener
+import android.hardware.SensorManager
 import android.os.Build
 import android.os.Bundle
+import android.view.Surface
 import android.view.WindowManager
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
@@ -49,6 +54,8 @@ import androidx.window.layout.WindowInfoTracker
 import androidx.window.layout.WindowLayoutInfo
 import kotlinx.coroutines.launch
 import java.util.concurrent.Executor
+import kotlin.math.atan2
+import kotlin.math.roundToInt
 
 /**
  * A capability probe for the "alarm clock on the cover screen, lamp on the inner
@@ -60,7 +67,7 @@ import java.util.concurrent.Executor
  *  3. Is the capability still available in a tented, half-folded posture?
  */
 @OptIn(ExperimentalWindowApi::class)
-class MainActivity : ComponentActivity() {
+class MainActivity : ComponentActivity(), SensorEventListener {
 
     private lateinit var controller: WindowAreaController
     private lateinit var executor: Executor
@@ -68,7 +75,12 @@ class MainActivity : ComponentActivity() {
     private var rearInfo: WindowAreaInfo? = null
     private var presenter: WindowAreaSessionPresenter? = null
     private var coverScreen: CoverScreen? = null
+    private var coverHost: RotatableHost? = null
     private var tapCount = 0
+
+    private var sensorManager: SensorManager? = null
+    private val gravity = FloatArray(3)
+    private var lastAutoQuadrant = -1f
 
     private val verdict = mutableStateOf("probing…")
     private val deviceDetail = mutableStateOf<List<String>>(emptyList())
@@ -77,13 +89,18 @@ class MainActivity : ComponentActivity() {
     private val touchResult = mutableStateOf("not tested yet")
     private val log = mutableStateOf<List<String>>(emptyList())
     private val lampOn = mutableStateOf(false)
+    private val coverRotation = mutableStateOf(0f)
+    private val autoRotate = mutableStateOf(false)
+    private val orientationDetail = mutableStateOf<List<String>>(emptyList())
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         controller = WindowAreaController.getOrCreate()
         executor = ContextCompat.getMainExecutor(this)
         window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+        sensorManager = getSystemService(SensorManager::class.java)
         refreshDeviceDetail()
+        refreshOrientationDetail()
 
         lifecycleScope.launch {
             lifecycle.repeatOnLifecycle(Lifecycle.State.STARTED) {
@@ -101,6 +118,36 @@ class MainActivity : ComponentActivity() {
         setContent {
             MaterialTheme(colorScheme = darkColorScheme()) {
                 if (lampOn.value) LampScreen() else ReportScreen()
+            }
+        }
+    }
+
+    override fun onResume() {
+        super.onResume()
+        sensorManager?.let { manager ->
+            manager.getDefaultSensor(Sensor.TYPE_GRAVITY)?.let { sensor ->
+                manager.registerListener(this, sensor, SensorManager.SENSOR_DELAY_UI)
+            }
+        }
+    }
+
+    override fun onPause() {
+        super.onPause()
+        sensorManager?.unregisterListener(this)
+    }
+
+    override fun onAccuracyChanged(sensor: Sensor?, accuracy: Int) = Unit
+
+    override fun onSensorChanged(event: SensorEvent) {
+        if (event.sensor.type != Sensor.TYPE_GRAVITY) return
+        System.arraycopy(event.values, 0, gravity, 0, 3)
+        updateCoverDiagnostics()
+        if (autoRotate.value) {
+            val quadrant = nearestQuadrant(gravityAngle())
+            if (quadrant != lastAutoQuadrant) {
+                lastAutoQuadrant = quadrant
+                applyCoverRotation(quadrant)
+                refreshOrientationDetail()
             }
         }
     }
@@ -159,6 +206,10 @@ class MainActivity : ComponentActivity() {
     // ---- the three tests ----------------------------------------------------
 
     private fun startDualScreen() {
+        if (presenter != null) {
+            addLog("A session is already running — ignoring.")
+            return
+        }
         val info = rearInfo
         if (info == null) {
             addLog("No rear-facing window area available to present on.")
@@ -173,15 +224,27 @@ class MainActivity : ComponentActivity() {
                     override fun onSessionStarted(session: WindowAreaSessionPresenter) {
                         presenter = session
                         addLog("SESSION STARTED — cover screen should be live now.")
-                        val cover = CoverScreen(session.context) { label -> onCoverTap(label) }
+                        val cover = CoverScreen(
+                            context = session.context,
+                            onTap = { label -> onCoverTap(label) },
+                            onRotate = { cycleCoverRotation() }
+                        )
+                        val host = RotatableHost(session.context).apply {
+                            addView(cover.root)
+                            contentRotation = coverRotation.value
+                        }
                         coverScreen = cover
-                        session.setContentView(cover.root)
+                        coverHost = host
+                        session.setContentView(host)
+                        updateCoverDiagnostics()
+                        refreshOrientationDetail()
                         setLamp(true)
                     }
 
                     override fun onSessionEnded(t: Throwable?) {
                         presenter = null
                         coverScreen = null
+                        coverHost = null
                         addLog("SESSION ENDED" + (t?.let { ": ${it.message}" } ?: " (normally)"))
                         setLamp(false)
                     }
@@ -227,6 +290,7 @@ class MainActivity : ComponentActivity() {
         touchResult.value = "TOUCH WORKS — '$label', $tapCount tap(s)"
         coverScreen?.reportTap(label, tapCount)
         addLog("cover tap received: $label")
+        refreshOrientationDetail()
     }
 
     private fun stopSession() {
@@ -240,6 +304,72 @@ class MainActivity : ComponentActivity() {
         window.attributes = window.attributes.apply {
             screenBrightness = if (on) 1.0f else WindowManager.LayoutParams.BRIGHTNESS_OVERRIDE_NONE
         }
+    }
+
+    // ---- cover screen orientation ------------------------------------------
+
+    private fun cycleCoverRotation() {
+        autoRotate.value = false
+        applyCoverRotation(coverRotation.value + 90f)
+        refreshOrientationDetail()
+        addLog("cover rotation set to ${coverRotation.value.toInt()} degrees")
+    }
+
+    private fun applyCoverRotation(degrees: Float) {
+        val normalised = ((degrees % 360f) + 360f) % 360f
+        coverRotation.value = normalised
+        coverHost?.contentRotation = normalised
+        updateCoverDiagnostics()
+    }
+
+    /** Angle of the gravity vector in the device's own coordinate frame. Zero means
+     *  the device's natural "up" is pointing up. */
+    private fun gravityAngle(): Float =
+        Math.toDegrees(atan2(gravity[0].toDouble(), gravity[1].toDouble())).toFloat()
+
+    private fun nearestQuadrant(degrees: Float): Float {
+        val snapped = (degrees / 90f).roundToInt() * 90f
+        return ((snapped % 360f) + 360f) % 360f
+    }
+
+    private fun displayRotation(): Int? =
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) display?.rotation else null
+
+    private fun coverDisplayRotation(): Int? =
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) presenter?.context?.display?.rotation else null
+
+    private fun rotationName(rotation: Int?): String = when (rotation) {
+        null -> "unknown"
+        Surface.ROTATION_0 -> "0 degrees"
+        Surface.ROTATION_90 -> "90 degrees"
+        Surface.ROTATION_180 -> "180 degrees"
+        Surface.ROTATION_270 -> "270 degrees"
+        else -> rotation.toString()
+    }
+
+    private fun refreshOrientationDetail() {
+        orientationDetail.value = listOf(
+            "cover content rotation: ${coverRotation.value.toInt()} degrees" +
+                if (autoRotate.value) " (auto)" else " (manual)",
+            "main display rotation:  ${rotationName(displayRotation())}",
+            "cover display rotation: ${rotationName(coverDisplayRotation())}",
+            "gravity angle:          ${gravityAngle().roundToInt()} degrees",
+            "gravity vector:         " +
+                "x=${"%.1f".format(gravity[0])} " +
+                "y=${"%.1f".format(gravity[1])} " +
+                "z=${"%.1f".format(gravity[2])}"
+        )
+    }
+
+    /** The cover screen is the only screen facing the user when the phone is tented,
+     *  so the numbers we need have to be readable there. */
+    private fun updateCoverDiagnostics() {
+        coverScreen?.showDiagnostics(
+            "rot ${coverRotation.value.toInt()}deg" +
+                (if (autoRotate.value) " auto" else "") +
+                " · grav ${gravityAngle().roundToInt()}deg" +
+                " · taps $tapCount"
+        )
     }
 
     // ---- reporting ----------------------------------------------------------
@@ -288,11 +418,15 @@ class MainActivity : ComponentActivity() {
         appendLine("-- cover screen touch --")
         appendLine(touchResult.value)
         appendLine()
+        appendLine("-- cover screen orientation --")
+        orientationDetail.value.forEach { appendLine(it) }
+        appendLine()
         appendLine("-- log --")
         log.value.forEach { appendLine(it) }
     }
 
     private fun copyReport() {
+        refreshOrientationDetail()
         val cm = getSystemService(ClipboardManager::class.java)
         cm.setPrimaryClip(ClipData.newPlainText("Fold Probe report", buildReport()))
         addLog("Report copied to clipboard.")
@@ -346,6 +480,7 @@ class MainActivity : ComponentActivity() {
                 Section("Window areas", areaDetail.value)
                 Section("Fold posture (live)", foldDetail.value)
                 Section("Cover screen touch", listOf(touchResult.value))
+                Section("Cover screen orientation", orientationDetail.value)
 
                 Spacer(Modifier.height(12.dp))
                 Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -354,6 +489,19 @@ class MainActivity : ComponentActivity() {
                     }
                     Button(onClick = { transferToCover() }, modifier = Modifier.fillMaxWidth()) {
                         Text("Test 2 — move to cover screen only")
+                    }
+                    Button(onClick = { cycleCoverRotation() }, modifier = Modifier.fillMaxWidth()) {
+                        Text("Rotate cover screen (now ${coverRotation.value.toInt()}\u00B0)")
+                    }
+                    Button(
+                        onClick = {
+                            autoRotate.value = !autoRotate.value
+                            lastAutoQuadrant = -1f
+                            refreshOrientationDetail()
+                        },
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Text("Auto-rotate from gravity: " + if (autoRotate.value) "ON" else "OFF")
                     }
                     Button(onClick = { stopSession() }, modifier = Modifier.fillMaxWidth()) {
                         Text("End session")

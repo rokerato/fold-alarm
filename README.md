@@ -8,7 +8,28 @@ A throwaway capability probe for one question:
 This app doesn't implement the alarm. It only finds out whether the alarm is buildable,
 before any real time gets spent on it.
 
-## Why this is in question
+## Result on a Galaxy Z Fold 6 (SM-F956N, Android 16)
+
+**Dual-screen mode works.** `PRESENT_ON_AREA` reports `AVAILABLE`, both panels light
+simultaneously, and touch reaches the cover-screen presentation. This contradicts the
+Android docs, which list dual-screen mode for Pixel Fold only — Samsung foldables
+support it too, at least on this device.
+
+| Check | Result |
+| --- | --- |
+| `PRESENT_ON_AREA` | `AVAILABLE` |
+| `TRANSFER_ACTIVITY_TO_AREA` | `AVAILABLE` |
+| Cover screen touch | Works |
+| Cover display | 968 x 2376 px |
+| Inner display | 1856 x 2160 px @ 2.25x |
+
+One defect found: the cover screen keeps its natural **portrait** orientation when the
+phone is tented, so landscape content renders sideways. A presented window has no
+orientation flag to set, so `RotatableHost` rotates the content within the window
+instead. The correct rotation for a tented phone is being determined empirically —
+the probe exposes a manual rotation cycle and a gravity-based auto mode.
+
+## Why this was in question
 
 There is exactly one public API for two simultaneously-lit panels:
 `WindowAreaCapability.Operation.OPERATION_PRESENT_ON_AREA` ("dual-screen mode") in
