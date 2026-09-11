@@ -1,91 +1,81 @@
-# Fold Probe
+# Fold Alarm
 
-A throwaway capability probe for one question:
+An alarm clock for a book-style foldable. Stand the phone tented on a bedside table
+and, when it rings, **both screens light at once**: the cover screen facing you shows
+the time with stop and snooze, while the inner screen faces down into the tent and
+becomes a warm lamp.
 
-> On a Galaxy Z Fold 6, can a third-party app light up **both** the cover screen and
-> the inner screen at the same time — alarm UI on the cover, warm lamp glow on the inner?
+Built and verified on a **Galaxy Z Fold 6 (SM-F956N), Android 16**.
 
-This app doesn't implement the alarm. It only finds out whether the alarm is buildable,
-before any real time gets spent on it.
+## How the two screens work
 
-## Result on a Galaxy Z Fold 6 (SM-F956N, Android 16)
+There is exactly one public API for two simultaneously-lit panels:
+`WindowAreaCapability.Operation.OPERATION_PRESENT_ON_AREA` ("dual-screen mode") in
+Jetpack WindowManager. The ringing activity runs on the inner display and presents
+the clock onto the cover display, so the lamp and the controls are the two halves of
+one session.
 
-**Dual-screen mode works.** `PRESENT_ON_AREA` reports `AVAILABLE`, both panels light
-simultaneously, and touch reaches the cover-screen presentation. This contradicts the
-Android docs, which list dual-screen mode for Pixel Fold only — Samsung foldables
-support it too, at least on this device.
+Google documents dual-screen mode for **Pixel Fold** only, and Samsung documents
+*rear display* mode — which turns the inner display **off** — so whether this was
+possible at all had to be settled on hardware rather than from the docs. It was, by
+the probe that is still in this repo (**Diagnostics**, in the app). Findings:
 
 | Check | Result |
 | --- | --- |
 | `PRESENT_ON_AREA` | `AVAILABLE` |
 | `TRANSFER_ACTIVITY_TO_AREA` | `AVAILABLE` |
-| Cover screen touch | Works |
+| Touch on a cover-screen presentation | Works (undocumented) |
+| Capability while tented (`HALF_OPENED`) | Still `AVAILABLE` |
 | Cover display | 968 x 2376 px |
 | Inner display | 1856 x 2160 px @ 2.25x |
 
-One defect found: the cover screen keeps its natural **portrait** orientation when the
-phone is tented, so landscape content renders sideways. A presented window has no
-orientation flag to set, so `RotatableHost` rotates the content within the window
-instead. The correct rotation for a tented phone is being determined empirically —
-the probe exposes a manual rotation cycle and a gravity-based auto mode.
+**Where dual-screen mode is unavailable the alarm still rings** — stop and snooze are
+drawn on whichever display is active, so it can never become undismissable.
 
-Measuring that turned out to need its own fix. The report can only be copied from the
-inner display, so reading it means unfolding the phone first — and every reading
-therefore described the *un-tented* state (`FLAT`, with the cover display's rotation
-already gone with the closed session). The probe now records the answer instead of
-reporting it live: **`✓ looks right`** on the cover screen snapshots rotation, posture,
-gravity and both display rotations at that instant, and posture changes are written to
-the log, which survives unfolding.
+## Orientation
 
-## Why this was in question
+A window presented on the cover screen keeps that display's natural **portrait**
+orientation however the phone is physically held, and `WindowAreaSessionPresenter`
+offers only `setContentView()` — there is no orientation flag to set. So
+`RotatableHost` rotates the content *inside* the window, measuring its child with the
+axes swapped at 90 and 270 degrees.
 
-There is exactly one public API for two simultaneously-lit panels:
-`WindowAreaCapability.Operation.OPERATION_PRESENT_ON_AREA` ("dual-screen mode") in
-Jetpack WindowManager. Google documents it for **Pixel Fold on Android 14+**. Samsung
-documents *rear display* mode (which turns the inner display **off**) from One UI 6.0.
-Whether Samsung foldables expose dual-screen mode to third-party apps is not stated
-either way in public docs — hence this probe.
+Which rotation a tent needs is undocumented, so it was measured. Standing tented, the
+device reported gravity `x=-9.6, y=-0.0`; `CoverRotation` derives 270 degrees from
+that, which matched the rotation chosen by hand. The alarm therefore orients itself
+from the gravity sensor and needs no setting.
 
-If the device reports `UNSUPPORTED`, no workaround exists at the app layer.
+## Waking a sleeping phone
 
-## What it reports
+- `AlarmManager.setAlarmClock()` — the only scheduling that stays punctual in Doze,
+  and it shows the alarm in the status bar
+- A high-importance notification with a **full-screen intent** launches the ringing
+  screen, since background activity starts are blocked from Android 10
+- `showWhenLocked` + `turnScreenOn` so it appears without unlocking
+- `BootReceiver` re-applies the alarm after a reboot
 
-- **Verdict** — a plain yes / maybe / no on dual-screen mode
-- **Window areas** — every area the platform exposes, its size, and the status of both
-  `PRESENT_ON_AREA` and `TRANSFER_ACTIVITY_TO_AREA`
-- **Fold posture, live** — `FoldingFeature` state, orientation, hinge bounds. Watch this
-  change as you fold, so we learn whether a tented posture reads as `HALF_OPENED`
-- **Cover screen touch** — whether taps on a window presented to the cover screen
-  actually reach the app. The alarm's stop/snooze buttons depend on this, and it is
-  *not* documented anywhere I could find
+Two permissions are required, and the app says so on its front screen if either is
+missing: **exact alarms** (otherwise it may fire late or not at all) and
+**notifications** (which launch the ringing screen).
 
-## How to use it
+## Using it
 
-1. Download `fold-probe.apk` from the GitHub Actions run (Artifacts section)
-2. Sideload it to the Fold 6 and open it
-3. Read the **Verdict** line, then:
-   - **Test 1 — light BOTH screens.** If it works: inner display turns amber (the lamp),
-     cover screen shows a mock clock with stop/snooze. Tap those buttons — the readout
-     confirms whether touch routes.
-   - **Test 2 — move to cover screen only.** The rear-display fallback. The inner display
-     should go dark and the app appear on the cover screen.
-4. **Fold the phone into a tent** while a session is running and see whether it survives
-5. Hit **Copy report to clipboard** and send the text back
+1. Download `fold-probe.apk` from the GitHub Actions run (Artifacts)
+2. Sideload it, set a time, grant the two permissions
+3. **Ring now (preview)** fires it immediately — no need to wait until morning
+4. Tent the phone to see both screens
 
-## Reading the result
-
-| Verdict | What it means |
-| --- | --- |
-| `AVAILABLE` / `ACTIVE` | The concept works. Build the real alarm. |
-| `UNAVAILABLE` | Supported, but blocked in that posture — worth probing further. |
-| `UNSUPPORTED` | No third-party route to both screens. The concept needs redesigning around one screen. |
+Snooze length, lamp brightness and lamp warmth are adjustable. **Diagnostics** opens
+the original capability probe.
 
 ## Building
 
-CI builds it on every push to this branch. To build locally you need the Android SDK:
+CI builds on every push to this branch; the Android SDK and Google Maven are
+unreachable from the dev container. Locally, with the SDK installed:
 
 ```
 ./gradlew assembleDebug
 ```
 
-The APK is debug-signed, so it is for sideloading only — not distribution.
+The APK is debug-signed — sideloading only, not distribution. Release signing needs
+your own keystore.
