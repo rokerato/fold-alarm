@@ -20,7 +20,8 @@ import android.widget.TextView
 class CoverScreen(
     context: Context,
     private val onTap: (String) -> Unit,
-    private val onRotate: () -> Unit
+    private val onRotate: () -> Unit,
+    private val onConfirm: () -> Unit
 ) {
 
     private val diagnostics: TextView
@@ -64,8 +65,17 @@ class CoverScreen(
             addView(pill(context, "snooze", amber, Color.parseColor("#1A1200")) { onTap("snooze") })
         }
 
-        val rotateButton = pill(context, "rotate ↻", Color.parseColor("#1E1E1E"), Color.parseColor("#AAAAAA")) {
-            onRotate()
+        // Both controls live here because the inner display faces away when the
+        // phone is tented -- this is the only screen the user can reach.
+        val controls = LinearLayout(context).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER
+            addView(pill(context, "rotate ↻", Color.parseColor("#1E1E1E"), Color.parseColor("#AAAAAA")) {
+                onRotate()
+            })
+            addView(pill(context, "✓ looks right", Color.parseColor("#1B3A22"), Color.parseColor("#7BD88F")) {
+                onConfirm()
+            })
         }
 
         root = LinearLayout(context).apply {
@@ -75,7 +85,7 @@ class CoverScreen(
             setPadding(56, 32, 56, 32)
             addView(topRow, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT))
             addView(buttonRow)
-            addView(rotateButton)
+            addView(controls)
             addView(diagnostics)
         }
     }

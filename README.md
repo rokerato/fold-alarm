@@ -29,6 +29,14 @@ orientation flag to set, so `RotatableHost` rotates the content within the windo
 instead. The correct rotation for a tented phone is being determined empirically —
 the probe exposes a manual rotation cycle and a gravity-based auto mode.
 
+Measuring that turned out to need its own fix. The report can only be copied from the
+inner display, so reading it means unfolding the phone first — and every reading
+therefore described the *un-tented* state (`FLAT`, with the cover display's rotation
+already gone with the closed session). The probe now records the answer instead of
+reporting it live: **`✓ looks right`** on the cover screen snapshots rotation, posture,
+gravity and both display rotations at that instant, and posture changes are written to
+the log, which survives unfolding.
+
 ## Why this was in question
 
 There is exactly one public API for two simultaneously-lit panels:

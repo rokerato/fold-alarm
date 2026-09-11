@@ -82,6 +82,12 @@ class MainActivity : ComponentActivity(), SensorEventListener {
     private val gravity = FloatArray(3)
     private var lastAutoQuadrant = -1f
 
+    /** Read once when the session starts: the presenter is gone by the time the
+     *  user unfolds the phone to read the report. */
+    private var coverRotationAtSessionStart: Int? = null
+    private var foldState = "unknown"
+    private var lastLoggedFoldState = ""
+
     private val verdict = mutableStateOf("probing…")
     private val deviceDetail = mutableStateOf<List<String>>(emptyList())
     private val areaDetail = mutableStateOf<List<String>>(emptyList())
@@ -92,6 +98,7 @@ class MainActivity : ComponentActivity(), SensorEventListener {
     private val coverRotation = mutableStateOf(0f)
     private val autoRotate = mutableStateOf(false)
     private val orientationDetail = mutableStateOf<List<String>>(emptyList())
+    private val confirmed = mutableStateOf<List<String>>(emptyList())
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -188,6 +195,11 @@ class MainActivity : ComponentActivity(), SensorEventListener {
     private fun onLayout(info: WindowLayoutInfo) {
         refreshDeviceDetail()
         val folds = info.displayFeatures.filterIsInstance<FoldingFeature>()
+        foldState = folds.firstOrNull()?.state?.toString() ?: "no folding feature"
+        if (foldState != lastLoggedFoldState) {
+            lastLoggedFoldState = foldState
+            addLog("posture -> $foldState (cover rot ${coverRotation.value.toInt()} deg)")
+        }
         foldDetail.value = if (folds.isEmpty()) {
             listOf("No folding feature reported — flat, shut, or running on the cover screen.")
         } else {
@@ -224,10 +236,17 @@ class MainActivity : ComponentActivity(), SensorEventListener {
                     override fun onSessionStarted(session: WindowAreaSessionPresenter) {
                         presenter = session
                         addLog("SESSION STARTED — cover screen should be live now.")
+                        coverRotationAtSessionStart =
+                            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+                                session.context.display?.rotation
+                            } else {
+                                null
+                            }
                         val cover = CoverScreen(
                             context = session.context,
                             onTap = { label -> onCoverTap(label) },
-                            onRotate = { cycleCoverRotation() }
+                            onRotate = { cycleCoverRotation() },
+                            onConfirm = { markOrientationCorrect() }
                         )
                         val host = RotatableHost(session.context).apply {
                             addView(cover.root)
@@ -245,6 +264,7 @@ class MainActivity : ComponentActivity(), SensorEventListener {
                         presenter = null
                         coverScreen = null
                         coverHost = null
+                        coverRotationAtSessionStart = null
                         addLog("SESSION ENDED" + (t?.let { ": ${it.message}" } ?: " (normally)"))
                         setLamp(false)
                     }
@@ -260,6 +280,10 @@ class MainActivity : ComponentActivity(), SensorEventListener {
     }
 
     private fun transferToCover() {
+        if (presenter != null) {
+            addLog("End the dual-screen session first — the window area is already in use.")
+            return
+        }
         val info = rearInfo
         if (info == null) {
             addLog("No rear-facing window area available.")
@@ -335,8 +359,31 @@ class MainActivity : ComponentActivity(), SensorEventListener {
     private fun displayRotation(): Int? =
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) display?.rotation else null
 
-    private fun coverDisplayRotation(): Int? =
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) presenter?.context?.display?.rotation else null
+    /**
+     * Snapshots the orientation at the instant the user says it looks right.
+     *
+     * The report can only be copied from the inner display, which means unfolding
+     * the phone first — so a live reading always describes the un-tented state.
+     * This records the tented one while it is still on the table.
+     */
+    private fun markOrientationCorrect() {
+        confirmed.value = listOf(
+            "CONFIRMED cover rotation: ${coverRotation.value.toInt()} degrees",
+            "mode:              " + if (autoRotate.value) "auto (from gravity)" else "manual",
+            "posture:           $foldState",
+            "main display:      ${rotationName(displayRotation())}",
+            "cover display:     ${rotationName(coverRotationAtSessionStart)}",
+            "gravity angle:     ${gravityAngle().roundToInt()} degrees",
+            "gravity vector:    " +
+                "x=${"%.1f".format(gravity[0])} " +
+                "y=${"%.1f".format(gravity[1])} " +
+                "z=${"%.1f".format(gravity[2])}"
+        )
+        coverScreen?.showDiagnostics(
+            "RECORDED ${coverRotation.value.toInt()}deg / $foldState — now unfold and copy the report"
+        )
+        addLog("CONFIRMED ${coverRotation.value.toInt()} deg in posture $foldState")
+    }
 
     private fun rotationName(rotation: Int?): String = when (rotation) {
         null -> "unknown"
@@ -352,7 +399,8 @@ class MainActivity : ComponentActivity(), SensorEventListener {
             "cover content rotation: ${coverRotation.value.toInt()} degrees" +
                 if (autoRotate.value) " (auto)" else " (manual)",
             "main display rotation:  ${rotationName(displayRotation())}",
-            "cover display rotation: ${rotationName(coverDisplayRotation())}",
+            "cover display rotation: ${rotationName(coverRotationAtSessionStart)}",
+            "posture:                $foldState",
             "gravity angle:          ${gravityAngle().roundToInt()} degrees",
             "gravity vector:         " +
                 "x=${"%.1f".format(gravity[0])} " +
@@ -418,7 +466,14 @@ class MainActivity : ComponentActivity(), SensorEventListener {
         appendLine("-- cover screen touch --")
         appendLine(touchResult.value)
         appendLine()
-        appendLine("-- cover screen orientation --")
+        appendLine("-- confirmed orientation --")
+        if (confirmed.value.isEmpty()) {
+            appendLine("not recorded")
+        } else {
+            confirmed.value.forEach { appendLine(it) }
+        }
+        appendLine()
+        appendLine("-- cover screen orientation (live, after unfolding) --")
         orientationDetail.value.forEach { appendLine(it) }
         appendLine()
         appendLine("-- log --")
@@ -480,7 +535,13 @@ class MainActivity : ComponentActivity(), SensorEventListener {
                 Section("Window areas", areaDetail.value)
                 Section("Fold posture (live)", foldDetail.value)
                 Section("Cover screen touch", listOf(touchResult.value))
-                Section("Cover screen orientation", orientationDetail.value)
+                Section(
+                    "Confirmed orientation",
+                    confirmed.value.ifEmpty {
+                        listOf("Not recorded — tent the phone, get it reading right, then tap '\u2713 looks right' on the cover screen.")
+                    }
+                )
+                Section("Cover screen orientation (live)", orientationDetail.value)
 
                 Spacer(Modifier.height(12.dp))
                 Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
