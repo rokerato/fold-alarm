@@ -21,8 +21,11 @@ class AlarmReceiver : BroadcastReceiver() {
     override fun onReceive(context: Context, intent: Intent) {
         if (intent.action != ACTION_ALARM) return
 
-        val alarmIntent = Intent(context, AlarmActivity::class.java)
-            .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TASK)
+        // Standby may already be running, in which case singleTask delivers this to
+        // onNewIntent and it rings in place; otherwise this launches it ringing.
+        val alarmIntent = Intent(context, StandbyActivity::class.java)
+            .putExtra(StandbyActivity.EXTRA_RING, true)
+            .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
 
         ensureChannel(context)
         val fullScreen = PendingIntent.getActivity(

@@ -7,6 +7,8 @@ import android.media.RingtoneManager
 import android.os.Build
 import android.os.VibrationEffect
 import android.os.Vibrator
+import android.os.Handler
+import android.os.Looper
 import android.os.VibratorManager
 
 /** Plays the user's alarm tone on the alarm stream, and vibrates alongside it. */
@@ -15,7 +17,12 @@ class AlarmRinger(private val context: Context) {
     private var player: MediaPlayer? = null
     private var vibrator: Vibrator? = null
 
-    fun start() {
+    /**
+     * @param rampSeconds fade the alarm in over this long, from silence. Waking to a
+     *   blast is a worse way to start a day than waking slowly, and a fade still
+     *   reaches full volume well inside a minute.
+     */
+    fun start(rampSeconds: Int = 0) {
         if (player != null) return
         val tone = RingtoneManager.getDefaultUri(RingtoneManager.TYPE_ALARM)
             ?: RingtoneManager.getDefaultUri(RingtoneManager.TYPE_RINGTONE)
@@ -31,10 +38,23 @@ class AlarmRinger(private val context: Context) {
                 setDataSource(context, tone)
                 isLooping = true
                 prepare()
+                if (rampSeconds > 0) setVolume(0f, 0f)
                 start()
             }
         }.getOrNull()
+        if (rampSeconds > 0) rampVolume(rampSeconds)
         startVibration()
+    }
+
+    private fun rampVolume(seconds: Int) {
+        val handler = Handler(Looper.getMainLooper())
+        val steps = seconds * 4
+        for (step in 1..steps) {
+            handler.postDelayed({
+                val level = step.toFloat() / steps
+                runCatching { player?.setVolume(level, level) }
+            }, step * 250L)
+        }
     }
 
     fun stop() {

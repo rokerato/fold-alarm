@@ -58,6 +58,49 @@ Two permissions are required, and the app says so on its front screen if either 
 missing: **exact alarms** (otherwise it may fire late or not at all) and
 **notifications** (which launch the ringing screen).
 
+## Standby
+
+**Start standby** puts the phone into bedside mode; tent it and the cover screen
+becomes the clock. Entering is manual on purpose — watching posture in the background
+all day would cost more battery than the feature is worth. Leave with the small x on
+the cover screen, or the back gesture on the inner one.
+
+Standby is a state machine, not a set of screens: the clock never moves between
+states, only its weight, colour and company change, and every transition cross-fades.
+
+| State | Cover screen | Inner screen |
+| --- | --- | --- |
+| **Clock** (room lit) | Time, date, next alarm | Black |
+| **Night** (room dark) | Time only, dim red, thin, drifting | Black |
+| **Sunrise** (before the alarm) | Unchanged | One half ramps up |
+| **Ringing** | Time, stop, snooze | Glow at full |
+
+Night is entered from the ambient light sensor, with different thresholds each way
+and a four-second settle, so a room hovering at the boundary does not flicker and a
+hand passing the sensor does not flip the display. A tap peeks: the clock brightens
+for six seconds, then fades back.
+
+**It rings in place.** When standby is running, the alarm needs no notification to
+launch anything — which takes the least reliable link out of the chain for the case
+that matters most. The notification path remains for alarms that fire when standby
+is not running.
+
+## Looking after the panel
+
+The cover screen is effectively an always-on display for eight hours a night, so:
+
+- **Pixel shift** — the clock drifts a few pixels on a slow random walk each minute,
+  the same trick Samsung uses for the status bar icons
+- **Red at night** — red barely drives the blue subpixel, which ages fastest, and the
+  dim colour is emitted rather than a bright one turned down
+- **Thin weight** — fewer lit pixels, by default and always at night
+- **Pure black elsewhere** — an OLED pixel showing black is off, drawing nothing and
+  ageing not at all, which is why the unused inner half costs nothing to leave lit-less
+- Optionally blank the clock after N minutes at night, tap to wake. Off by default: a
+  bedside clock you cannot read has failed.
+
+A battery warning appears on the cover screen when standby starts unplugged below 30%.
+
 ## Using it
 
 1. Download `fold-probe.apk` from the GitHub Actions run (Artifacts)
