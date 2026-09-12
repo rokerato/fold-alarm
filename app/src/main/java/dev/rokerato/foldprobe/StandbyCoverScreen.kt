@@ -166,7 +166,7 @@ class StandbyCoverScreen(
             }
         }
         subtitle.setTextColor(if (night) NIGHT_MUTED else AMBER)
-        subtitle.fadeTo(if (night && !peek) 0f else 1f)
+        subtitle.fadeTo(if (night && !peek && !forceSubtitle) 0f else 1f)
     }
 
     /** The line under the clock: next alarm in the day, a battery warning if one is due. */
@@ -189,6 +189,9 @@ class StandbyCoverScreen(
         centre.fadeTo(if (blanked) 0f else 1f)
         if (blanked) exit.fadeTo(0f)
     }
+
+    /** Keep the subtitle readable at night too, while diagnostics are on. */
+    var forceSubtitle: Boolean = false
 
     var prefsWeight: Int = 0
         set(value) {

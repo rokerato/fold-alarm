@@ -67,7 +67,8 @@ class MainActivity : ComponentActivity() {
     private val nightBlankMinutes = mutableStateOf(10)
     private val sunriseMode = mutableStateOf(0)
     private val sunriseMinutes = mutableStateOf(20)
-    private val glowFirstHalf = mutableStateOf(false)
+    private val glowSwapped = mutableStateOf(false)
+    private val showDiagnostics = mutableStateOf(false)
     private val nextRing = mutableStateOf("")
     private val needsExactAlarm = mutableStateOf(false)
     private val needsNotifications = mutableStateOf(false)
@@ -104,7 +105,8 @@ class MainActivity : ComponentActivity() {
         nightBlankMinutes.value = prefs.nightBlankMinutes
         sunriseMode.value = prefs.sunriseMode
         sunriseMinutes.value = prefs.sunriseMinutes
-        glowFirstHalf.value = prefs.glowFirstHalf
+        glowSwapped.value = prefs.glowSwapped
+        showDiagnostics.value = prefs.showDiagnostics
         needsExactAlarm.value = !AlarmScheduler.canScheduleExact(this)
         needsNotifications.value = Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
             ContextCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS) !=
@@ -320,17 +322,29 @@ class MainActivity : ComponentActivity() {
                     }
                     Spacer(Modifier.height(16.dp))
                     Toggle(
-                        "Glow from the other half",
-                        "Only the half beside the cover screen should light, so it glows off the table rather than shining at you. Flip this if the wrong half lights.",
-                        glowFirstHalf.value
+                        "Swap the glowing half",
+                        "Only the half beside the cover screen lights, so its light reaches the room off the table rather than shining at you. The default is right on a Z Fold 6; swap it if the wrong half lights.",
+                        glowSwapped.value
                     ) {
-                        glowFirstHalf.value = it
-                        prefs.glowFirstHalf = it
+                        glowSwapped.value = it
+                        prefs.glowSwapped = it
                     }
                     Spacer(Modifier.height(16.dp))
                     SliderRow("Snooze ${snooze.value} min", snooze.value.toFloat(), 1f..30f) {
                         snooze.value = it.toInt()
                         prefs.snoozeMinutes = it.toInt()
+                    }
+                }
+
+                Section("Testing")
+                Card {
+                    Toggle(
+                        "Show diagnostics on the cover",
+                        "Prints the current mode and the light reading under the clock, so a night that behaves oddly can be explained.",
+                        showDiagnostics.value
+                    ) {
+                        showDiagnostics.value = it
+                        prefs.showDiagnostics = it
                     }
                 }
 

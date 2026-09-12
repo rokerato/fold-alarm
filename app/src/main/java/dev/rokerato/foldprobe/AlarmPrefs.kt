@@ -57,15 +57,25 @@ class AlarmPrefs(context: Context) {
         set(value) = prefs.edit().putInt(KEY_SUNRISE_MINUTES, value).apply()
 
     /**
-     * Which half of the inner display glows.
+     * Swaps which half of the inner display glows.
      *
      * Only the half nearest the cover screen faces into the tent, so its light
-     * reaches you bounced off the table rather than head-on. No API says which half
-     * that is, so it is a setting and the first tent test settles it.
+     * reaches the room bounced off the table rather than head-on. No API says which
+     * half that is; measured on a tented Z Fold 6 it is the first half, so that is
+     * the default and this only exists for a device where it is the other one.
      */
-    var glowFirstHalf: Boolean
-        get() = prefs.getBoolean(KEY_GLOW_HALF, false)
-        set(value) = prefs.edit().putBoolean(KEY_GLOW_HALF, value).apply()
+    var glowSwapped: Boolean
+        get() = prefs.getBoolean(KEY_GLOW_SWAPPED, false)
+        set(value) = prefs.edit().putBoolean(KEY_GLOW_SWAPPED, value).apply()
+
+    /** Which half to light, after the swap. */
+    val glowFirstHalf: Boolean
+        get() = !glowSwapped
+
+    /** Show lux and the current mode on the cover screen, for testing. */
+    var showDiagnostics: Boolean
+        get() = prefs.getBoolean(KEY_DIAGNOSTICS, false)
+        set(value) = prefs.edit().putBoolean(KEY_DIAGNOSTICS, value).apply()
 
     /** Blank the cover screen after a while at night; a tap brings it back. */
     var nightBlank: Boolean
@@ -108,7 +118,8 @@ class AlarmPrefs(context: Context) {
         const val KEY_NIGHT_TINT = "night_tint"
         const val KEY_SUNRISE_MODE = "sunrise_mode"
         const val KEY_SUNRISE_MINUTES = "sunrise_minutes"
-        const val KEY_GLOW_HALF = "glow_first_half"
+        const val KEY_GLOW_SWAPPED = "glow_swapped"
+        const val KEY_DIAGNOSTICS = "show_diagnostics"
         const val KEY_NIGHT_BLANK = "night_blank"
         const val KEY_NIGHT_BLANK_MINUTES = "night_blank_minutes"
     }

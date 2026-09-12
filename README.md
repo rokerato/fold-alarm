@@ -101,6 +101,17 @@ The cover screen is effectively an always-on display for eight hours a night, so
 
 A battery warning appears on the cover screen when standby starts unplugged below 30%.
 
+The system bars are hidden on the inner display. The status bar was the one thing
+there bright enough to matter over a night, in exactly the same pixels the whole
+time — and a bedside clock should not have one anyway.
+
+**Brightness is left to the system**, except while the alarm is actually sounding. A
+window's `screenBrightness` override turned out to reach the cover display as well as
+the inner one the window is on, so pinning it low to keep the black inner screen dark
+also pinned the clock dark and stopped the cover screen responding to the room at
+all. There was nothing to gain from it either way: on OLED the glow's intensity is
+carried by the colour that is emitted, so black is already off at any brightness.
+
 ## Using it
 
 1. Download `fold-probe.apk` from the GitHub Actions run (Artifacts)

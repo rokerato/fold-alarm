@@ -37,6 +37,9 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.core.content.ContextCompat
+import androidx.core.view.WindowCompat
+import androidx.core.view.WindowInsetsCompat
+import androidx.core.view.WindowInsetsControllerCompat
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.lifecycleScope
 import androidx.lifecycle.repeatOnLifecycle
@@ -110,6 +113,7 @@ class StandbyActivity : ComponentActivity(), SensorEventListener {
         ambient = AmbientLight(this) { dark ->
             isDark = dark
             lastInteraction = System.currentTimeMillis()
+            Log.i(TAG, "room dark = $dark (${ambient.lux} lux)")
             refresh()
         }
 
@@ -122,6 +126,7 @@ class StandbyActivity : ComponentActivity(), SensorEventListener {
                 WindowManager.LayoutParams.FLAG_SHOW_WHEN_LOCKED or
                 WindowManager.LayoutParams.FLAG_TURN_SCREEN_ON
         )
+        hideSystemBars()
 
         if (intent?.getBooleanExtra(EXTRA_RING, false) == true) startRinging()
 
@@ -147,6 +152,27 @@ class StandbyActivity : ComponentActivity(), SensorEventListener {
         }
 
         setContent { InnerScreen() }
+    }
+
+    /**
+     * The status bar is the one thing on the inner display bright enough to matter
+     * over a whole night, and it sits in exactly the same pixels the entire time.
+     * Hiding it is both the right look for a bedside clock and the panel's best
+     * interest.
+     */
+    private fun hideSystemBars() {
+        WindowCompat.setDecorFitsSystemWindows(window, false)
+        WindowInsetsControllerCompat(window, window.decorView).apply {
+            systemBarsBehavior =
+                WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
+            hide(WindowInsetsCompat.Type.systemBars())
+        }
+    }
+
+    override fun onWindowFocusChanged(hasFocus: Boolean) {
+        super.onWindowFocusChanged(hasFocus)
+        // Regaining focus brings the bars back, so ask again.
+        if (hasFocus) hideSystemBars()
     }
 
     override fun onNewIntent(intent: Intent) {
@@ -217,6 +243,7 @@ class StandbyActivity : ComponentActivity(), SensorEventListener {
         }
 
         val peek = peekUntil > now
+        cover?.forceSubtitle = prefs.showDiagnostics
         cover?.applyMode(next, peek)
         cover?.setSubtitle(subtitleFor(next))
         cover?.prefsWeight = prefs.clockWeight
@@ -227,10 +254,23 @@ class StandbyActivity : ComponentActivity(), SensorEventListener {
             now - lastInteraction > prefs.nightBlankMinutes * 60_000L
         cover?.setBlanked(blanked)
 
-        // The inner display is the lamp and nothing else, so its brightness follows
-        // the glow and sits at the floor whenever there is none.
+        // Brightness is left to the system except while the alarm is actually
+        // sounding.
+        //
+        // A window's screenBrightness override turned out to reach the cover display
+        // too, not just the inner one this window is on -- so pinning it low to keep
+        // the black inner screen dark also pinned the clock dark, and stopped the
+        // cover screen responding to the room at all. There is nothing to gain from
+        // it either way: on OLED the glow's intensity is carried by the colour that
+        // is emitted, so black is already off at any brightness.
+        //
+        // Ringing is the deliberate exception. Being woken beats being subtle.
         window.attributes = window.attributes.apply {
-            screenBrightness = (glow.value * prefs.lampBrightness).coerceIn(0.02f, 1f)
+            screenBrightness = if (next == StandbyMode.RINGING) {
+                1f
+            } else {
+                WindowManager.LayoutParams.BRIGHTNESS_OVERRIDE_NONE
+            }
         }
     }
 
@@ -245,6 +285,9 @@ class StandbyActivity : ComponentActivity(), SensorEventListener {
     }
 
     private fun subtitleFor(next: StandbyMode): String? {
+        if (prefs.showDiagnostics) {
+            return "%s · %.1f lux".format(next.name, ambient.lux)
+        }
         if (next == StandbyMode.RINGING) return null
         val battery = batteryWarning()
         if (battery != null) return battery
