@@ -108,17 +108,21 @@ class StandbyCoverScreen(
             setOnClickListener { onExit() }
         }
 
-        root = object : FrameLayout(context) {}.apply {
+        root = FrameLayout(context).apply {
             setBackgroundColor(Color.BLACK)
             addView(
                 centre,
-                LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.MATCH_PARENT).apply {
-                    gravity = Gravity.CENTER
-                }
+                FrameLayout.LayoutParams(
+                    FrameLayout.LayoutParams.MATCH_PARENT,
+                    FrameLayout.LayoutParams.MATCH_PARENT
+                ).apply { gravity = Gravity.CENTER }
             )
             addView(
                 exit,
-                LayoutParams(LayoutParams.WRAP_CONTENT, LayoutParams.WRAP_CONTENT).apply {
+                FrameLayout.LayoutParams(
+                    FrameLayout.LayoutParams.WRAP_CONTENT,
+                    FrameLayout.LayoutParams.WRAP_CONTENT
+                ).apply {
                     gravity = Gravity.TOP or Gravity.END
                     setMargins(dp(6), dp(6), dp(6), dp(6))
                 }
