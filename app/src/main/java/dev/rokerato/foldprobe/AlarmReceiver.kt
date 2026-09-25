@@ -47,10 +47,16 @@ class AlarmReceiver : BroadcastReceiver() {
 
         runCatching { context.startActivity(alarmIntent) }
 
-        // Same time tomorrow, unless the user turns it off in the meantime.
+        // The next day it repeats on. An alarm set for no days rings once and
+        // switches itself off, as a one-off alarm does on any other clock.
         val prefs = AlarmPrefs(context)
         if (prefs.enabled) {
-            AlarmScheduler.schedule(context, prefs.nextOccurrence(System.currentTimeMillis() + 60_000L))
+            if (prefs.repeats) {
+                AlarmScheduler.schedule(context, prefs.nextOccurrence(System.currentTimeMillis() + 60_000L))
+            } else {
+                prefs.enabled = false
+                prefs.nextTrigger = 0L
+            }
         }
     }
 

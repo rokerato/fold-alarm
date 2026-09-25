@@ -1,8 +1,9 @@
 package dev.rokerato.foldprobe
 
 import android.content.Context
+import android.graphics.Canvas
 import android.graphics.Color
-import android.graphics.Typeface
+import android.graphics.Paint
 import android.graphics.drawable.GradientDrawable
 import android.view.Gravity
 import android.view.View
@@ -14,13 +15,16 @@ import android.widget.TextView
 /**
  * Everything the cover screen shows, across every standby mode.
  *
- * One view tree rather than four, because the modes are meant to feel like one
- * surface changing its mind rather than four screens swapping: the clock never
- * moves between states, only its weight, colour and company change.
+ * Two arrangements in one view tree. Standby -- clock, night and the peek between
+ * them -- is a single centred clock whose weight, colour and company change while it
+ * stays put, so the night reads as one surface changing its mind. Ringing is the one
+ * moment that earns a different layout: the time moves aside to make room for two
+ * buttons sized for a thumb that is still asleep.
  *
- * Plain views rather than Compose — a presentation on a secondary display has no
- * lifecycle owner of its own — and laid out in landscape, since a tented phone puts
- * this display on its side. [RotatableHost] turns it the right way up.
+ * Set in Jost ([CoverFont]). Plain views rather than Compose -- a presentation on a
+ * secondary display has no lifecycle owner of its own -- and laid out in landscape,
+ * since a tented phone puts this display on its side. [RotatableHost] turns it the
+ * right way up.
  */
 class StandbyCoverScreen(
     private val context: Context,
@@ -32,13 +36,21 @@ class StandbyCoverScreen(
 
     private val density = context.resources.displayMetrics.density
 
-    private val greeting: TextView
+    // Standby: the centred clock and the line beneath it.
     private val clock: TextClock
-    private val date: TextClock
+    private val infoRow: LinearLayout
+    private val alarmGlyph: AlarmGlyph
+    private val alarmText: TextView
+    private val alarmDot: View
+    private val peekLine: TextView
     private val subtitle: TextView
-    private val buttons: LinearLayout
+    private val standby: LinearLayout
+
+    // Ringing: the time to one side, snooze and stop to the other.
+    private val ringing: LinearLayout
+    private val snoozeUntil: TextView
+
     private val exit: TextView
-    private val centre: LinearLayout
 
     val root: FrameLayout
 
@@ -46,55 +58,130 @@ class StandbyCoverScreen(
     private var peeking = false
 
     init {
-        greeting = TextView(context).apply {
-            text = "GOOD MORNING"
-            textSize = 15f
-            letterSpacing = 0.14f
-            setTextColor(AMBER)
-            typeface = weightOf(3)
-            visibility = View.GONE
-        }
+        clock = clockView(sizeSp = 168f)
 
-        clock = TextClock(context).apply {
-            format12Hour = "h:mm"
-            format24Hour = "H:mm"
-            textSize = 96f
-            includeFontPadding = false
-            setTextColor(DAY_CLOCK)
-            typeface = weightOf(0)
-        }
-
-        date = TextClock(context).apply {
-            format12Hour = "EEEE, d MMMM"
-            format24Hour = "EEEE, d MMMM"
-            textSize = 15f
+        val date = TextClock(context).apply {
+            format12Hour = DATE_FORMAT
+            format24Hour = DATE_FORMAT
+            textSize = 18f
             setTextColor(DAY_MUTED)
-            typeface = weightOf(2)
+            typeface = CoverFont.weight(context, CoverFont.MEDIUM)
+        }
+        alarmDot = dot(Color.parseColor("#4A4A4A"))
+        alarmGlyph = AlarmGlyph(context).apply { colour = AMBER }
+        alarmText = TextView(context).apply {
+            textSize = 18f
+            setTextColor(AMBER)
+            typeface = CoverFont.weight(context, CoverFont.MEDIUM)
+            fontFeatureSettings = CoverFont.FIGURES
+        }
+        infoRow = LinearLayout(context).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            addView(date)
+            addView(alarmDot, margins(start = 12, end = 12, width = 4, height = 4))
+            addView(alarmGlyph, margins(end = 6, width = 16, height = 16))
+            addView(alarmText)
+        }
+
+        peekLine = TextView(context).apply {
+            textSize = 18f
+            setTextColor(NIGHT_LINE)
+            typeface = CoverFont.weight(context, CoverFont.MEDIUM)
+            fontFeatureSettings = CoverFont.FIGURES
+            visibility = View.GONE
         }
 
         subtitle = TextView(context).apply {
-            textSize = 13f
+            textSize = 14f
             setTextColor(AMBER)
-            typeface = weightOf(2)
+            typeface = CoverFont.weight(context, CoverFont.REGULAR)
+            fontFeatureSettings = CoverFont.FIGURES
             visibility = View.GONE
         }
 
-        buttons = LinearLayout(context).apply {
-            orientation = LinearLayout.HORIZONTAL
-            gravity = Gravity.CENTER
-            visibility = View.GONE
-            addView(pill("stop", Color.parseColor("#2E2E2E"), Color.WHITE) { onStop() })
-            addView(pill("snooze", AMBER, Color.parseColor("#1A1200")) { onSnooze() })
-        }
-
-        centre = LinearLayout(context).apply {
+        standby = LinearLayout(context).apply {
             orientation = LinearLayout.VERTICAL
             gravity = Gravity.CENTER
-            addView(greeting, spacing(bottom = 6))
             addView(clock)
-            addView(date, spacing(top = 2))
-            addView(subtitle, spacing(top = 10))
-            addView(buttons, spacing(top = 18))
+            addView(infoRow, margins(top = 6))
+            addView(peekLine, margins(top = 8))
+            addView(subtitle, margins(top = 10))
+        }
+
+        // ---- ringing ----
+
+        val ringClock = clockView(sizeSp = 150f).apply {
+            typeface = CoverFont.weight(context, CoverFont.LIGHT)
+        }
+        val greeting = TextView(context).apply {
+            text = "Good morning"
+            textSize = 18f
+            setTextColor(AMBER)
+            typeface = CoverFont.weight(context, CoverFont.MEDIUM)
+        }
+        val ringDate = TextClock(context).apply {
+            format12Hour = DATE_FORMAT
+            format24Hour = DATE_FORMAT
+            textSize = 17f
+            setTextColor(DAY_MUTED)
+            typeface = CoverFont.weight(context, CoverFont.MEDIUM)
+        }
+        val timeColumn = LinearLayout(context).apply {
+            orientation = LinearLayout.VERTICAL
+            addView(greeting)
+            addView(ringClock, margins(top = 4))
+            addView(ringDate, margins(top = 4))
+        }
+
+        snoozeUntil = TextView(context).apply {
+            textSize = 14f
+            setTextColor(Color.parseColor("#B31A1200"))
+            typeface = CoverFont.weight(context, CoverFont.MEDIUM)
+            fontFeatureSettings = CoverFont.FIGURES
+            gravity = Gravity.CENTER
+        }
+        // Snooze is the big one. Hit half asleep, the larger target should be the
+        // one whose mistake costs nine minutes rather than the morning.
+        val snooze = LinearLayout(context).apply {
+            orientation = LinearLayout.VERTICAL
+            gravity = Gravity.CENTER
+            background = capsule(AMBER)
+            isClickable = true
+            setOnClickListener { onSnooze() }
+            addView(TextView(context).apply {
+                text = "Snooze"
+                textSize = 24f
+                setTextColor(Color.parseColor("#1A1200"))
+                typeface = CoverFont.weight(context, CoverFont.MEDIUM)
+                gravity = Gravity.CENTER
+            })
+            addView(snoozeUntil, margins(top = 2))
+        }
+        val stop = TextView(context).apply {
+            text = "Stop"
+            textSize = 22f
+            setTextColor(DAY_CLOCK)
+            typeface = CoverFont.weight(context, CoverFont.REGULAR)
+            gravity = Gravity.CENTER
+            background = capsule(Color.parseColor("#262629"))
+            isClickable = true
+            setOnClickListener { onStop() }
+        }
+        val buttons = LinearLayout(context).apply {
+            orientation = LinearLayout.VERTICAL
+            addView(snooze, LinearLayout.LayoutParams(dp(280), dp(104)))
+            addView(stop, LinearLayout.LayoutParams(dp(280), dp(72)).apply { topMargin = dp(14) })
+        }
+
+        ringing = LinearLayout(context).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            setPadding(dp(48), 0, dp(48), 0)
+            visibility = View.GONE
+            addView(timeColumn)
+            addView(View(context), LinearLayout.LayoutParams(0, 1, 1f))
+            addView(buttons)
         }
 
         exit = TextView(context).apply {
@@ -110,13 +197,8 @@ class StandbyCoverScreen(
 
         root = FrameLayout(context).apply {
             setBackgroundColor(Color.BLACK)
-            addView(
-                centre,
-                FrameLayout.LayoutParams(
-                    FrameLayout.LayoutParams.MATCH_PARENT,
-                    FrameLayout.LayoutParams.MATCH_PARENT
-                ).apply { gravity = Gravity.CENTER }
-            )
+            addView(standby, fill())
+            addView(ringing, fill())
             addView(
                 exit,
                 FrameLayout.LayoutParams(
@@ -137,39 +219,63 @@ class StandbyCoverScreen(
     // ---- state --------------------------------------------------------------
 
     fun applyMode(next: StandbyMode, peek: Boolean) {
+        val wasRinging = mode == StandbyMode.RINGING
         mode = next
         peeking = peek
+        val isRinging = next == StandbyMode.RINGING
         val night = next == StandbyMode.NIGHT || next == StandbyMode.SUNRISE
 
-        greeting.visibility = if (next == StandbyMode.RINGING) View.VISIBLE else View.GONE
-        buttons.visibility = if (next == StandbyMode.RINGING) View.VISIBLE else View.GONE
-        date.visibility = if (night) View.GONE else View.VISIBLE
-        // Hidden at night so a half-awake hand cannot cancel the alarm; a peek
-        // brings it back for anyone who actually means it.
-        exit.fadeTo(if (night && !peek) 0f else 1f)
-
-        when {
-            next == StandbyMode.RINGING -> {
-                clock.setTextColor(DAY_CLOCK)
-                clock.typeface = weightOf(1)
-                clock.textSize = 88f
-            }
-            night -> {
-                clock.setTextColor(if (peek) NIGHT_CLOCK_PEEK else NIGHT_CLOCK)
-                clock.typeface = weightOf(0)
-                clock.textSize = 104f
-            }
-            else -> {
-                clock.setTextColor(DAY_CLOCK)
-                clock.typeface = weightOf(prefsWeight)
-                clock.textSize = 96f
-            }
+        if (isRinging != wasRinging || ringing.visibility == standby.visibility) {
+            ringing.visibility = if (isRinging) View.VISIBLE else View.GONE
+            standby.visibility = if (isRinging) View.GONE else View.VISIBLE
         }
-        subtitle.setTextColor(if (night) NIGHT_MUTED else AMBER)
+
+        // Hidden at night so a half-awake hand cannot leave standby by accident; a
+        // peek brings it back for anyone who actually means it. Never while ringing:
+        // stop and snooze are the only ways out of an alarm.
+        exit.fadeTo(if (isRinging || (night && !peek)) 0f else 1f)
+        exit.isClickable = !isRinging && (!night || peek)
+        exit.setTextColor(if (night) NIGHT_MUTED else Color.parseColor("#6E6E6E"))
+
+        infoRow.visibility = if (night) View.GONE else View.VISIBLE
+        peekLine.visibility = if (night && peek) View.VISIBLE else View.GONE
+
+        if (night) {
+            clock.setTextColor(if (peek) NIGHT_CLOCK_PEEK else NIGHT_CLOCK)
+            // The thinnest weight lights the fewest pixels, all night.
+            clock.typeface = CoverFont.weight(
+                context,
+                if (peek) CoverFont.THIN + 50 else CoverFont.THIN
+            )
+            clock.textSize = 184f
+        } else {
+            clock.setTextColor(DAY_CLOCK)
+            clock.typeface = CoverFont.weight(context, CoverFont.forPreference(prefsWeight))
+            clock.textSize = 168f
+        }
+        subtitle.setTextColor(if (night) NIGHT_LINE else AMBER)
         subtitle.fadeTo(if (night && !peek && !forceSubtitle) 0f else 1f)
     }
 
-    /** The line under the clock: next alarm in the day, a battery warning if one is due. */
+    /**
+     * The next alarm, as a time ("6:30") and how far off it is ("in 4 h 13 min");
+     * null when none is set.
+     */
+    fun setAlarm(time: String?, countdown: String?) {
+        val set = time != null
+        alarmDot.visibility = if (set) View.VISIBLE else View.GONE
+        alarmGlyph.visibility = if (set) View.VISIBLE else View.GONE
+        alarmText.visibility = if (set) View.VISIBLE else View.GONE
+        alarmText.text = time ?: ""
+        peekLine.text = if (set) "Alarm $time  ·  $countdown" else "No alarm set"
+    }
+
+    /** When a snooze pressed now would ring again. */
+    fun setSnoozeUntil(time: String) {
+        snoozeUntil.text = "until $time"
+    }
+
+    /** A line under the clock for what must be said: a battery warning, diagnostics. */
     fun setSubtitle(text: String?) {
         if (text.isNullOrEmpty()) {
             subtitle.visibility = View.GONE
@@ -181,12 +287,12 @@ class StandbyCoverScreen(
 
     /** Drift, so the brightest thing on screen never sits still for a whole night. */
     fun setShift(x: Float, y: Float) {
-        centre.animate().translationX(x).translationY(y).setDuration(4_000L).start()
+        standby.animate().translationX(x).translationY(y).setDuration(4_000L).start()
     }
 
     /** Blanked for the night; a tap restores it. */
     fun setBlanked(blanked: Boolean) {
-        centre.fadeTo(if (blanked) 0f else 1f)
+        standby.fadeTo(if (blanked) 0f else 1f)
         if (blanked) exit.fadeTo(0f)
     }
 
@@ -195,67 +301,99 @@ class StandbyCoverScreen(
 
     var prefsWeight: Int = 0
         set(value) {
+            if (field == value) return
             field = value
-            if (mode == StandbyMode.CLOCK) clock.typeface = weightOf(value)
+            if (mode == StandbyMode.CLOCK) {
+                clock.typeface = CoverFont.weight(context, CoverFont.forPreference(value))
+            }
         }
 
     // ---- building blocks ----------------------------------------------------
+
+    private fun clockView(sizeSp: Float) = TextClock(context).apply {
+        format12Hour = "h:mm"
+        format24Hour = "H:mm"
+        textSize = sizeSp
+        includeFontPadding = false
+        letterSpacing = -0.02f
+        fontFeatureSettings = CoverFont.FIGURES
+        setTextColor(DAY_CLOCK)
+        typeface = CoverFont.weight(context, CoverFont.THIN)
+    }
 
     private fun View.fadeTo(target: Float) {
         if (alpha == target) return
         animate().alpha(target).setDuration(FADE_MS).start()
     }
 
-    private fun weightOf(step: Int): Typeface = Typeface.create(
-        when (step) {
-            0 -> "sans-serif-thin"
-            1 -> "sans-serif-light"
-            2 -> "sans-serif"
-            else -> "sans-serif-medium"
-        },
-        Typeface.NORMAL
-    )
-
     private fun dp(value: Int): Int = (value * density).toInt()
 
-    private fun spacing(top: Int = 0, bottom: Int = 0) =
-        LinearLayout.LayoutParams(
-            LinearLayout.LayoutParams.WRAP_CONTENT,
-            LinearLayout.LayoutParams.WRAP_CONTENT
-        ).apply { setMargins(0, dp(top), 0, dp(bottom)) }
+    private fun dot(colour: Int) = View(context).apply {
+        background = GradientDrawable().apply {
+            shape = GradientDrawable.OVAL
+            setColor(colour)
+        }
+    }
 
-    private fun pill(label: String, fill: Int, ink: Int, onClick: () -> Unit): View =
-        TextView(context).apply {
-            text = label
-            textSize = 21f
-            setTextColor(ink)
-            typeface = weightOf(2)
-            gravity = Gravity.CENTER
-            // Pressed half asleep, in the dark: generous, and capsule-shaped in the
-            // One UI idiom rather than a rectangle with rounded corners.
-            setPadding(dp(34), dp(15), dp(34), dp(15))
-            background = GradientDrawable().apply {
-                shape = GradientDrawable.RECTANGLE
-                cornerRadius = dp(100).toFloat()
-                setColor(fill)
-            }
-            isClickable = true
-            setOnClickListener { onClick() }
-            layoutParams = LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.WRAP_CONTENT,
-                LinearLayout.LayoutParams.WRAP_CONTENT
-            ).apply { setMargins(dp(6), 0, dp(6), 0) }
+    private fun capsule(fill: Int) = GradientDrawable().apply {
+        shape = GradientDrawable.RECTANGLE
+        cornerRadius = dp(100).toFloat()
+        setColor(fill)
+    }
+
+    private fun fill() = FrameLayout.LayoutParams(
+        FrameLayout.LayoutParams.MATCH_PARENT,
+        FrameLayout.LayoutParams.MATCH_PARENT
+    )
+
+    private fun margins(
+        top: Int = 0,
+        start: Int = 0,
+        end: Int = 0,
+        width: Int? = null,
+        height: Int? = null
+    ) = LinearLayout.LayoutParams(
+        width?.let { dp(it) } ?: LinearLayout.LayoutParams.WRAP_CONTENT,
+        height?.let { dp(it) } ?: LinearLayout.LayoutParams.WRAP_CONTENT
+    ).apply {
+        topMargin = dp(top)
+        marginStart = dp(start)
+        marginEnd = dp(end)
+    }
+
+    /** A small alarm-clock mark, drawn rather than borrowed, to match Jost's stroke. */
+    private class AlarmGlyph(context: Context) : View(context) {
+        var colour: Int = Color.WHITE
+
+        private val paint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            style = Paint.Style.STROKE
+            strokeCap = Paint.Cap.ROUND
         }
 
+        override fun onDraw(canvas: Canvas) {
+            val u = width / 16f
+            paint.color = colour
+            paint.strokeWidth = 1.5f * u
+            canvas.drawCircle(8f * u, 9f * u, 5.2f * u, paint)
+            canvas.drawLine(8f * u, 6.4f * u, 8f * u, 9f * u, paint)
+            canvas.drawLine(8f * u, 9f * u, 9.8f * u, 10.2f * u, paint)
+            canvas.drawLine(3f * u, 2.6f * u, 1.6f * u, 4f * u, paint)
+            canvas.drawLine(13f * u, 2.6f * u, 14.4f * u, 4f * u, paint)
+        }
+    }
+
     private companion object {
+        const val DATE_FORMAT = "EEEE d MMMM"
+
         val AMBER = Color.parseColor("#F0B266")
         val DAY_CLOCK = Color.parseColor("#F4F4F4")
-        val DAY_MUTED = Color.parseColor("#8C8C8C")
+        val DAY_MUTED = Color.parseColor("#9A9A9A")
 
         // Deep reds, chosen as emitted values rather than dimmed whites: red barely
         // drives the blue subpixel, which is the one that ages fastest.
         val NIGHT_CLOCK = Color.parseColor("#7A2418")
         val NIGHT_CLOCK_PEEK = Color.parseColor("#D9553A")
+        val NIGHT_LINE = Color.parseColor("#8A3020")
         val NIGHT_MUTED = Color.parseColor("#5A1C12")
 
         const val FADE_MS = 900L

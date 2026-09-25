@@ -24,14 +24,19 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.drawBehind
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
@@ -54,9 +59,6 @@ import androidx.window.layout.WindowInfoTracker
 import androidx.window.layout.WindowLayoutInfo
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
-import java.text.SimpleDateFormat
-import java.util.Date
-import java.util.Locale
 import java.util.concurrent.Executor
 
 /**
@@ -246,6 +248,13 @@ class StandbyActivity : ComponentActivity(), SensorEventListener {
         cover?.forceSubtitle = prefs.showDiagnostics
         cover?.applyMode(next, peek)
         cover?.setSubtitle(subtitleFor(next))
+        val target = prefs.nextTrigger
+        if (target > now) {
+            cover?.setAlarm(TimeText.clock(this, target), "in " + TimeText.span(target - now))
+        } else {
+            cover?.setAlarm(null, null)
+        }
+        cover?.setSnoozeUntil(TimeText.clock(this, now + prefs.snoozeMinutes * 60_000L))
         cover?.prefsWeight = prefs.clockWeight
 
         val blanked = prefs.nightBlank &&
@@ -284,16 +293,13 @@ class StandbyActivity : ComponentActivity(), SensorEventListener {
         return ((now - start).toFloat() / window).coerceIn(0f, 1f)
     }
 
+    /** Only what must be said; the next alarm has its own place beside the date. */
     private fun subtitleFor(next: StandbyMode): String? {
         if (prefs.showDiagnostics) {
             return "%s · %.1f lux".format(next.name, ambient.lux)
         }
         if (next == StandbyMode.RINGING) return null
-        val battery = batteryWarning()
-        if (battery != null) return battery
-        val target = prefs.nextTrigger
-        if (!prefs.enabled || target <= 0L) return "No alarm set"
-        return "Alarm " + SimpleDateFormat("HH:mm", Locale.getDefault()).format(Date(target))
+        return batteryWarning()
     }
 
     /** Eight hours of cover screen with no charger is fine; eight hours from 15% is not. */
@@ -434,23 +440,54 @@ class StandbyActivity : ComponentActivity(), SensorEventListener {
         Box(Modifier.fillMaxSize().background(Color.Black)) {
             if (foldVertical.value) {
                 Row(Modifier.fillMaxSize()) {
-                    GlowHalf(prefs.glowFirstHalf, lit, Modifier.weight(1f).fillMaxHeight())
-                    GlowHalf(!prefs.glowFirstHalf, lit, Modifier.weight(1f).fillMaxHeight())
+                    GlowHalf(prefs.glowFirstHalf, lit, true, Modifier.weight(1f).fillMaxHeight())
+                    GlowHalf(!prefs.glowFirstHalf, lit, false, Modifier.weight(1f).fillMaxHeight())
                 }
             } else {
                 Column(Modifier.fillMaxSize()) {
-                    GlowHalf(prefs.glowFirstHalf, lit, Modifier.weight(1f).fillMaxWidth())
-                    GlowHalf(!prefs.glowFirstHalf, lit, Modifier.weight(1f).fillMaxWidth())
+                    GlowHalf(prefs.glowFirstHalf, lit, true, Modifier.weight(1f).fillMaxWidth())
+                    GlowHalf(!prefs.glowFirstHalf, lit, false, Modifier.weight(1f).fillMaxWidth())
                 }
             }
             if (!onCover.value) Fallback(Modifier.align(Alignment.Center))
         }
     }
 
+    /**
+     * The lit half is brightest a little towards the hinge and falls away to its
+     * outer edges, like light from a lamp rather than a lit panel: no hard line at
+     * the hinge, and the pixels at the edges -- the ones that face the sleeper most
+     * directly -- work least.
+     */
     @Composable
-    private fun GlowHalf(lit: Boolean, colour: Color, modifier: Modifier) {
-        Box(modifier.background(if (lit) colour else Color.Black))
+    private fun GlowHalf(lit: Boolean, colour: Color, hingeAfter: Boolean, modifier: Modifier) {
+        if (!lit || colour == Color.Black) {
+            Box(modifier.background(Color.Black))
+            return
+        }
+        val vertical = foldVertical.value
+        Box(
+            modifier.drawBehind {
+                val towardHinge = if (hingeAfter) 0.6f else 0.4f
+                val centre = if (vertical) {
+                    Offset(size.width * towardHinge, size.height / 2f)
+                } else {
+                    Offset(size.width / 2f, size.height * towardHinge)
+                }
+                drawRect(
+                    Brush.radialGradient(
+                        0f to colour,
+                        0.55f to colour.scaled(0.62f),
+                        1f to colour.scaled(0.16f),
+                        center = centre,
+                        radius = maxOf(size.width, size.height) * 0.72f
+                    )
+                )
+            }
+        )
     }
+
+    private fun Color.scaled(f: Float) = Color(red * f, green * f, blue * f)
 
     /**
      * Shown only when the cover screen is unavailable. An alarm that cannot be
@@ -465,17 +502,36 @@ class StandbyActivity : ComponentActivity(), SensorEventListener {
         ) {
             val alarmSounding = mode.value == StandbyMode.RINGING
             Text(
-                if (alarmSounding) "GOOD MORNING" else "Standby",
-                color = Color(0xCCFFFFFF),
+                if (alarmSounding) "Good morning" else "Standby",
+                color = if (alarmSounding) AMBER else Color(0xCCFFFFFF),
                 fontSize = 20.sp,
-                fontWeight = FontWeight.Light
+                fontWeight = FontWeight.Medium
             )
             if (alarmSounding) {
-                Spacer(Modifier.height(20.dp))
-                Button(onClick = { stopAlarm() }) { Text("Stop") }
-                Spacer(Modifier.height(6.dp))
-                TextButton(onClick = { snoozeAlarm() }) {
-                    Text("Snooze ${prefs.snoozeMinutes} min", color = Color(0xAAFFFFFF))
+                Spacer(Modifier.height(24.dp))
+                // The same order as the cover screen: snooze is the big target.
+                Button(
+                    onClick = { snoozeAlarm() },
+                    shape = RoundedCornerShape(50),
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = AMBER,
+                        contentColor = Color(0xFF1A1200)
+                    ),
+                    modifier = Modifier.width(280.dp).height(96.dp)
+                ) {
+                    Text("Snooze ${prefs.snoozeMinutes} min", fontSize = 22.sp, fontWeight = FontWeight.SemiBold)
+                }
+                Spacer(Modifier.height(14.dp))
+                Button(
+                    onClick = { stopAlarm() },
+                    shape = RoundedCornerShape(50),
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = Color(0xFF262629),
+                        contentColor = Color(0xFFF4F4F4)
+                    ),
+                    modifier = Modifier.width(280.dp).height(68.dp)
+                ) {
+                    Text("Stop", fontSize = 20.sp)
                 }
             }
         }
@@ -504,5 +560,6 @@ class StandbyActivity : ComponentActivity(), SensorEventListener {
         private const val SUNRISE_OFF = 2
         private const val PEEK_MS = 6_000L
         private const val RAMP_SECONDS = 30
+        private val AMBER = Color(0xFFF0B266)
     }
 }

@@ -13,9 +13,12 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -34,23 +37,25 @@ import androidx.compose.material3.SwitchDefaults
 import androidx.compose.material3.Text
 import androidx.compose.material3.darkColorScheme
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.core.content.ContextCompat
-import java.text.SimpleDateFormat
-import java.util.Date
-import java.util.Locale
+import kotlinx.coroutines.delay
 
 /**
- * Settings, and the button that starts standby.
+ * The alarm, and the button that starts standby.
  *
- * Laid out in One UI's idiom — near-black ground, generously rounded cards, capsule
- * controls, one clear primary action — held to Material 3's structure underneath.
+ * Laid out in One UI's idiom and set in the phone's own font: near-black ground,
+ * generously rounded cards, capsule controls, one clear primary action. On the
+ * inner screen it is two columns -- the alarm and what to do next on the left,
+ * everything that tunes it on the right -- and one column where only one fits.
  */
 class MainActivity : ComponentActivity() {
 
@@ -58,6 +63,7 @@ class MainActivity : ComponentActivity() {
 
     private val time = mutableStateOf("")
     private val enabled = mutableStateOf(false)
+    private val days = mutableStateOf(AlarmPrefs.EVERY_DAY)
     private val snooze = mutableStateOf(9)
     private val brightness = mutableStateOf(1f)
     private val warmth = mutableStateOf(0.75f)
@@ -94,8 +100,9 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun refresh() {
-        time.value = "%02d:%02d".format(prefs.hour, prefs.minute)
+        time.value = TimeText.clock(this, prefs.hour, prefs.minute)
         enabled.value = prefs.enabled
+        days.value = prefs.days
         snooze.value = prefs.snoozeMinutes
         brightness.value = prefs.lampBrightness
         warmth.value = prefs.lampWarmth
@@ -111,10 +118,11 @@ class MainActivity : ComponentActivity() {
         needsNotifications.value = Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
             ContextCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS) !=
             PackageManager.PERMISSION_GRANTED
-        nextRing.value = if (prefs.enabled && prefs.nextTrigger > 0L) {
-            SimpleDateFormat("EEE HH:mm", Locale.getDefault()).format(Date(prefs.nextTrigger))
-        } else {
-            "Off"
+        val now = System.currentTimeMillis()
+        nextRing.value = when {
+            !prefs.enabled -> "Off"
+            prefs.nextTrigger > now -> TimeText.untilRing(this, now, prefs.nextTrigger)
+            else -> "Not scheduled"
         }
     }
 
@@ -139,6 +147,12 @@ class MainActivity : ComponentActivity() {
         refresh()
     }
 
+    private fun toggleDay(bit: Int) {
+        prefs.days = prefs.days xor bit
+        if (prefs.enabled) AlarmScheduler.sync(this)
+        refresh()
+    }
+
     private fun openExactAlarmSettings() {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.S) return
         runCatching {
@@ -160,205 +174,300 @@ class MainActivity : ComponentActivity() {
 
     @Composable
     private fun SettingsScreen() {
-        Surface(color = GROUND, modifier = Modifier.fillMaxSize()) {
-            Column(
-                modifier = Modifier
-                    .fillMaxSize()
-                    .verticalScroll(rememberScrollState())
-                    .padding(horizontal = 20.dp, vertical = 28.dp)
-            ) {
-                Text("Fold Alarm", color = INK, fontSize = 30.sp, fontWeight = FontWeight.Light)
-                Spacer(Modifier.height(4.dp))
-                Text(
-                    "Tent the phone. The clock goes on the cover screen; the inner half glows.",
-                    color = MUTED,
-                    fontSize = 13.sp
-                )
-
-                Spacer(Modifier.height(24.dp))
-
-                Card {
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Column(Modifier.clickable { pickTime() }) {
-                            Text(
-                                time.value,
-                                color = INK,
-                                fontSize = 60.sp,
-                                fontWeight = FontWeight.Thin
-                            )
-                            Text("Next: ${nextRing.value}", color = AMBER, fontSize = 13.sp)
-                        }
-                        Switch(
-                            checked = enabled.value,
-                            onCheckedChange = { setEnabled(it) },
-                            colors = SwitchDefaults.colors(checkedTrackColor = AMBER)
-                        )
-                    }
-                    Spacer(Modifier.height(14.dp))
-                    Capsule("Change time", filled = false) { pickTime() }
-                }
-
-                Spacer(Modifier.height(16.dp))
-                Capsule("Start standby", filled = true) { startStandby() }
-
-                if (needsExactAlarm.value || needsNotifications.value) {
-                    Spacer(Modifier.height(16.dp))
-                    Card(tint = WARN) {
-                        Text(
-                            "Android needs permission before this can wake you",
-                            color = AMBER,
-                            fontSize = 14.sp,
-                            fontWeight = FontWeight.Medium
-                        )
-                        if (needsExactAlarm.value) {
-                            Spacer(Modifier.height(10.dp))
-                            Text(
-                                "Exact alarms are off, so the alarm may fire late or not at all.",
-                                color = INK,
-                                fontSize = 13.sp
-                            )
-                            Spacer(Modifier.height(8.dp))
-                            Capsule("Allow exact alarms", filled = true) { openExactAlarmSettings() }
-                        }
-                        if (needsNotifications.value) {
-                            Spacer(Modifier.height(10.dp))
-                            Text(
-                                "Notifications are off. They launch the alarm when standby is not running.",
-                                color = INK,
-                                fontSize = 13.sp
-                            )
-                            Spacer(Modifier.height(8.dp))
-                            Capsule("Allow notifications", filled = true) {
-                                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-                                    requestNotifications.launch(Manifest.permission.POST_NOTIFICATIONS)
-                                }
-                            }
-                        }
-                    }
-                }
-
-                Section("Standby")
-                Card {
-                    Label("Clock weight")
-                    Segmented(
-                        options = listOf("Thin", "Light", "Regular", "Medium"),
-                        selected = clockWeight.value
-                    ) {
-                        clockWeight.value = it
-                        prefs.clockWeight = it
-                    }
-                    Spacer(Modifier.height(16.dp))
-                    Toggle(
-                        "Dim and redden at night",
-                        "Follows the room's light. Red spares the blue subpixels, which age fastest.",
-                        nightTint.value
-                    ) {
-                        nightTint.value = it
-                        prefs.nightTint = it
-                    }
-                    Spacer(Modifier.height(16.dp))
-                    Toggle(
-                        "Blank the clock at night",
-                        "Off by default: a bedside clock you cannot read has failed. A tap wakes it.",
-                        nightBlank.value
-                    ) {
-                        nightBlank.value = it
-                        prefs.nightBlank = it
-                    }
-                    if (nightBlank.value) {
-                        Spacer(Modifier.height(12.dp))
-                        SliderRow(
-                            "Blank after ${nightBlankMinutes.value} min",
-                            nightBlankMinutes.value.toFloat(),
-                            1f..60f
-                        ) {
-                            nightBlankMinutes.value = it.toInt()
-                            prefs.nightBlankMinutes = it.toInt()
-                        }
-                    }
-                }
-
-                Section("Waking")
-                Card {
-                    Label("Glow")
-                    Segmented(
-                        options = listOf("Ramp up", "At alarm", "Off"),
-                        selected = sunriseMode.value
-                    ) {
-                        sunriseMode.value = it
-                        prefs.sunriseMode = it
-                    }
-                    if (sunriseMode.value == 0) {
-                        Spacer(Modifier.height(12.dp))
-                        SliderRow(
-                            "Ramp over ${sunriseMinutes.value} min",
-                            sunriseMinutes.value.toFloat(),
-                            5f..45f
-                        ) {
-                            sunriseMinutes.value = it.toInt()
-                            prefs.sunriseMinutes = it.toInt()
-                        }
-                    }
-                    Spacer(Modifier.height(16.dp))
-                    SliderRow(
-                        "Brightness ${(brightness.value * 100).toInt()}%",
-                        brightness.value,
-                        0.15f..1f
-                    ) {
-                        brightness.value = it
-                        prefs.lampBrightness = it
-                    }
-                    SliderRow(
-                        "Warmth ${(warmth.value * 100).toInt()}%",
-                        warmth.value,
-                        0f..1f
-                    ) {
-                        warmth.value = it
-                        prefs.lampWarmth = it
-                    }
-                    Spacer(Modifier.height(16.dp))
-                    Toggle(
-                        "Swap the glowing half",
-                        "Only the half beside the cover screen lights, so its light reaches the room off the table rather than shining at you. The default is right on a Z Fold 6; swap it if the wrong half lights.",
-                        glowSwapped.value
-                    ) {
-                        glowSwapped.value = it
-                        prefs.glowSwapped = it
-                    }
-                    Spacer(Modifier.height(16.dp))
-                    SliderRow("Snooze ${snooze.value} min", snooze.value.toFloat(), 1f..30f) {
-                        snooze.value = it.toInt()
-                        prefs.snoozeMinutes = it.toInt()
-                    }
-                }
-
-                Section("Testing")
-                Card {
-                    Toggle(
-                        "Show diagnostics on the cover",
-                        "Prints the current mode and the light reading under the clock, so a night that behaves oddly can be explained.",
-                        showDiagnostics.value
-                    ) {
-                        showDiagnostics.value = it
-                        prefs.showDiagnostics = it
-                    }
-                }
-
-                Spacer(Modifier.height(24.dp))
-                Capsule("Ring now (preview)", filled = false) { startStandby(ringing = true) }
-                Spacer(Modifier.height(10.dp))
-                Capsule("Diagnostics", filled = false) {
-                    startActivity(Intent(this@MainActivity, ProbeActivity::class.java))
-                }
-
-                Spacer(Modifier.height(28.dp))
-                Text("Debug-signed build for sideloading.", color = FAINT, fontSize = 12.sp)
+        LaunchedEffect(Unit) {
+            // "Rings in 7 h 12 min" should not go stale while the screen is open.
+            while (true) {
+                delay(30_000L)
+                refresh()
             }
         }
+        Surface(color = GROUND, modifier = Modifier.fillMaxSize()) {
+            BoxWithConstraints(Modifier.fillMaxSize()) {
+                if (maxWidth >= 600.dp) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .padding(start = 40.dp, end = 40.dp, top = 56.dp, bottom = 24.dp),
+                        horizontalArrangement = Arrangement.spacedBy(32.dp)
+                    ) {
+                        Column(
+                            Modifier
+                                .weight(0.8f)
+                                .fillMaxHeight()
+                                .verticalScroll(rememberScrollState())
+                        ) { Hero() }
+                        Column(
+                            Modifier
+                                .weight(1f)
+                                .fillMaxHeight()
+                                .verticalScroll(rememberScrollState())
+                        ) {
+                            Spacer(Modifier.height(36.dp))
+                            Tuning()
+                        }
+                    }
+                } else {
+                    Column(
+                        Modifier
+                            .fillMaxSize()
+                            .verticalScroll(rememberScrollState())
+                            .padding(horizontal = 20.dp, vertical = 28.dp)
+                    ) {
+                        Hero()
+                        Spacer(Modifier.height(32.dp))
+                        Tuning()
+                    }
+                }
+            }
+        }
+    }
+
+    /** The alarm itself, the days it repeats, and the one thing to do next. */
+    @Composable
+    private fun Hero() {
+        Text("Fold Alarm", color = MUTED, fontSize = 15.sp, fontWeight = FontWeight.SemiBold)
+        Spacer(Modifier.height(56.dp))
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.Bottom
+        ) {
+            Text(
+                time.value,
+                color = INK,
+                fontSize = 96.sp,
+                fontWeight = FontWeight.ExtraLight,
+                modifier = Modifier.clickable { pickTime() }
+            )
+            Switch(
+                checked = enabled.value,
+                onCheckedChange = { setEnabled(it) },
+                colors = switchColours(),
+                modifier = Modifier.padding(bottom = 18.dp)
+            )
+        }
+        Text(
+            nextRing.value,
+            color = if (enabled.value) AMBER else MUTED,
+            fontSize = 15.sp,
+            fontWeight = FontWeight.Medium
+        )
+        Spacer(Modifier.height(22.dp))
+        Days()
+        if (days.value == 0) {
+            Spacer(Modifier.height(8.dp))
+            Text(
+                "No days chosen: rings once, then switches off.",
+                color = MUTED,
+                fontSize = 12.sp,
+                modifier = Modifier.padding(start = 4.dp)
+            )
+        }
+
+        if (needsExactAlarm.value || needsNotifications.value) {
+            Spacer(Modifier.height(20.dp))
+            Permissions()
+        }
+
+        Spacer(Modifier.height(40.dp))
+        Capsule("Start standby", filled = true) { startStandby() }
+        Spacer(Modifier.height(10.dp))
+        Text(
+            "Tent the phone, cover screen facing you.",
+            color = MUTED,
+            fontSize = 13.sp,
+            textAlign = TextAlign.Center,
+            modifier = Modifier.fillMaxWidth()
+        )
+    }
+
+    /** Sunday first. Tapping a day adds or removes it. */
+    @Composable
+    private fun Days() {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(6.dp)
+        ) {
+            DAY_LETTERS.forEachIndexed { index, letter ->
+                val bit = 1 shl index
+                val on = days.value and bit != 0
+                Surface(
+                    color = if (on) CHIP else Color.Transparent,
+                    shape = RoundedCornerShape(50),
+                    modifier = Modifier
+                        .weight(1f)
+                        .height(40.dp)
+                        .clickable { toggleDay(bit) }
+                ) {
+                    Box(contentAlignment = Alignment.Center) {
+                        Text(
+                            letter,
+                            color = if (on) AMBER else MUTED,
+                            fontSize = 14.sp,
+                            fontWeight = if (on) FontWeight.Bold else FontWeight.Medium
+                        )
+                    }
+                }
+            }
+        }
+    }
+
+    @Composable
+    private fun Permissions() {
+        Card(tint = WARN) {
+            Text(
+                "Android needs permission before this can wake you",
+                color = AMBER,
+                fontSize = 14.sp,
+                fontWeight = FontWeight.Medium
+            )
+            if (needsExactAlarm.value) {
+                Spacer(Modifier.height(10.dp))
+                Text(
+                    "Exact alarms are off, so the alarm may fire late or not at all.",
+                    color = INK,
+                    fontSize = 13.sp
+                )
+                Spacer(Modifier.height(8.dp))
+                Capsule("Allow exact alarms", filled = true) { openExactAlarmSettings() }
+            }
+            if (needsNotifications.value) {
+                Spacer(Modifier.height(10.dp))
+                Text(
+                    "Notifications are off. They launch the alarm when standby is not running.",
+                    color = INK,
+                    fontSize = 13.sp
+                )
+                Spacer(Modifier.height(8.dp))
+                Capsule("Allow notifications", filled = true) {
+                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                        requestNotifications.launch(Manifest.permission.POST_NOTIFICATIONS)
+                    }
+                }
+            }
+        }
+    }
+
+    /** Everything that tunes the night and the morning. */
+    @Composable
+    private fun Tuning() {
+        Section("At night", first = true)
+        Card {
+            Toggle(
+                "Red clock in the dark",
+                "Follows the room's light. Red spares the blue subpixels, which age fastest.",
+                nightTint.value
+            ) {
+                nightTint.value = it
+                prefs.nightTint = it
+            }
+            Rule()
+            Label("Clock")
+            Segmented(listOf("Thin", "Light", "Regular"), clockWeight.value) {
+                clockWeight.value = it
+                prefs.clockWeight = it
+            }
+            Rule()
+            Toggle(
+                "Blank the clock at night",
+                "A tap wakes it. Off by default: a bedside clock you cannot read has failed.",
+                nightBlank.value
+            ) {
+                nightBlank.value = it
+                prefs.nightBlank = it
+            }
+            if (nightBlank.value) {
+                Spacer(Modifier.height(12.dp))
+                SliderRow(
+                    "Blank after",
+                    "${nightBlankMinutes.value} min",
+                    nightBlankMinutes.value.toFloat(),
+                    1f..60f
+                ) {
+                    nightBlankMinutes.value = it.toInt()
+                    prefs.nightBlankMinutes = it.toInt()
+                }
+            }
+        }
+
+        Section("Waking up")
+        Card {
+            Label("Light")
+            Segmented(listOf("Sunrise", "At alarm", "Off"), sunriseMode.value) {
+                sunriseMode.value = it
+                prefs.sunriseMode = it
+            }
+            if (sunriseMode.value == 0) {
+                Rule()
+                SliderRow(
+                    "Sunrise starts",
+                    "${sunriseMinutes.value} min before",
+                    sunriseMinutes.value.toFloat(),
+                    5f..45f
+                ) {
+                    sunriseMinutes.value = it.toInt()
+                    prefs.sunriseMinutes = it.toInt()
+                }
+            }
+            if (sunriseMode.value != 2) {
+                Rule()
+                SliderRow(
+                    "Brightness",
+                    "${(brightness.value * 100).toInt()}%",
+                    brightness.value,
+                    0.15f..1f
+                ) {
+                    brightness.value = it
+                    prefs.lampBrightness = it
+                }
+                Spacer(Modifier.height(8.dp))
+                SliderRow("Warmth", warmthName(warmth.value), warmth.value, 0f..1f) {
+                    warmth.value = it
+                    prefs.lampWarmth = it
+                }
+            }
+            Rule()
+            SliderRow("Snooze", "${snooze.value} min", snooze.value.toFloat(), 1f..30f) {
+                snooze.value = it.toInt()
+                prefs.snoozeMinutes = it.toInt()
+            }
+        }
+
+        Section("If something looks wrong")
+        Card {
+            Toggle(
+                "Swap the glowing half",
+                "Only the half beside the cover screen should light, so its light reaches the room off the table. Swap it if the other half lights.",
+                glowSwapped.value
+            ) {
+                glowSwapped.value = it
+                prefs.glowSwapped = it
+            }
+            Rule()
+            Toggle(
+                "Show diagnostics on the cover",
+                "The current mode and light reading, under the clock.",
+                showDiagnostics.value
+            ) {
+                showDiagnostics.value = it
+                prefs.showDiagnostics = it
+            }
+        }
+
+        Spacer(Modifier.height(16.dp))
+        Row(Modifier.padding(horizontal = 12.dp)) {
+            Link("Ring now") { startStandby(ringing = true) }
+            Link("Diagnostics") {
+                startActivity(Intent(this@MainActivity, ProbeActivity::class.java))
+            }
+        }
+    }
+
+    private fun warmthName(value: Float): String = when {
+        value < 0.25f -> "Daylight"
+        value < 0.5f -> "Soft white"
+        value < 0.8f -> "Warm"
+        else -> "Candle"
     }
 
     // ---- building blocks ----------------------------------------------------
@@ -370,26 +479,52 @@ class MainActivity : ComponentActivity() {
             shape = RoundedCornerShape(26.dp),
             modifier = Modifier.fillMaxWidth()
         ) {
-            Column(Modifier.padding(20.dp)) { content() }
+            Column(Modifier.padding(horizontal = 20.dp, vertical = 18.dp)) { content() }
         }
     }
 
     @Composable
-    private fun Section(title: String) {
-        Spacer(Modifier.height(26.dp))
+    private fun Section(title: String, first: Boolean = false) {
+        if (!first) Spacer(Modifier.height(22.dp))
         Text(
             title,
             color = MUTED,
-            fontSize = 13.sp,
-            fontWeight = FontWeight.Medium,
-            modifier = Modifier.padding(start = 6.dp, bottom = 10.dp)
+            fontSize = 14.sp,
+            fontWeight = FontWeight.SemiBold,
+            modifier = Modifier.padding(start = 20.dp, bottom = 10.dp)
         )
+    }
+
+    /** A hairline between rows of one card, as One UI lists do. */
+    @Composable
+    private fun Rule() {
+        Spacer(Modifier.height(14.dp))
+        Box(
+            Modifier
+                .fillMaxWidth()
+                .height(1.dp)
+                .background(RULE)
+        )
+        Spacer(Modifier.height(14.dp))
     }
 
     @Composable
     private fun Label(text: String) {
-        Text(text, color = INK, fontSize = 15.sp)
+        Text(text, color = INK, fontSize = 16.sp)
         Spacer(Modifier.height(10.dp))
+    }
+
+    @Composable
+    private fun Link(label: String, onClick: () -> Unit) {
+        Text(
+            label,
+            color = MUTED,
+            fontSize = 14.sp,
+            fontWeight = FontWeight.Medium,
+            modifier = Modifier
+                .clickable(onClick = onClick)
+                .padding(horizontal = 8.dp, vertical = 12.dp)
+        )
     }
 
     @Composable
@@ -399,46 +534,70 @@ class MainActivity : ComponentActivity() {
             horizontalArrangement = Arrangement.SpaceBetween,
             verticalAlignment = Alignment.CenterVertically
         ) {
-            Column(Modifier.padding(end = 16.dp)) {
-                Text(title, color = INK, fontSize = 15.sp)
-                Spacer(Modifier.height(2.dp))
-                Text(note, color = MUTED, fontSize = 12.sp)
+            Column(
+                Modifier
+                    .weight(1f)
+                    .padding(end = 16.dp)
+            ) {
+                Text(title, color = INK, fontSize = 16.sp)
+                Spacer(Modifier.height(3.dp))
+                Text(note, color = MUTED, fontSize = 13.sp)
             }
-            Switch(
-                checked = checked,
-                onCheckedChange = onChange,
-                colors = SwitchDefaults.colors(checkedTrackColor = AMBER)
-            )
+            Switch(checked = checked, onCheckedChange = onChange, colors = switchColours())
         }
     }
 
     @Composable
+    private fun switchColours() = SwitchDefaults.colors(
+        checkedTrackColor = AMBER,
+        checkedThumbColor = Color(0xFF1A1200),
+        checkedBorderColor = AMBER
+    )
+
+    @Composable
     private fun SliderRow(
         label: String,
+        reading: String,
         value: Float,
         range: ClosedFloatingPointRange<Float>,
         onChange: (Float) -> Unit
     ) {
-        Text(label, color = INK, fontSize = 14.sp)
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween
+        ) {
+            Text(label, color = INK, fontSize = 16.sp)
+            Text(reading, color = MUTED, fontSize = 15.sp)
+        }
         Slider(
             value = value,
             onValueChange = onChange,
             valueRange = range,
-            colors = SliderDefaults.colors(thumbColor = AMBER, activeTrackColor = AMBER)
+            colors = SliderDefaults.colors(
+                thumbColor = INK,
+                activeTrackColor = AMBER,
+                inactiveTrackColor = PILL
+            )
         )
     }
 
-    /** A capsule row of choices — One UI's shape, used where a dropdown would hide things. */
+    /**
+     * A capsule track holding its choices, the chosen one lifted out in white --
+     * One UI's segmented control, used where a dropdown would hide things.
+     */
     @Composable
     private fun Segmented(options: List<String>, selected: Int, onSelect: (Int) -> Unit) {
         Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.spacedBy(6.dp)
+            modifier = Modifier
+                .fillMaxWidth()
+                .background(PILL, RoundedCornerShape(50))
+                .padding(4.dp),
+            horizontalArrangement = Arrangement.spacedBy(4.dp)
         ) {
             options.forEachIndexed { index, label ->
                 val active = index == selected
                 Surface(
-                    color = if (active) AMBER else PILL,
+                    color = if (active) INK else Color.Transparent,
                     shape = RoundedCornerShape(50),
                     modifier = Modifier
                         .weight(1f)
@@ -446,10 +605,11 @@ class MainActivity : ComponentActivity() {
                 ) {
                     Text(
                         label,
-                        color = if (active) Color(0xFF1A1200) else INK,
-                        fontSize = 13.sp,
-                        modifier = Modifier.padding(vertical = 10.dp),
-                        textAlign = androidx.compose.ui.text.style.TextAlign.Center
+                        color = if (active) GROUND else INK,
+                        fontSize = 14.sp,
+                        fontWeight = if (active) FontWeight.SemiBold else FontWeight.Normal,
+                        modifier = Modifier.padding(vertical = 8.dp),
+                        textAlign = TextAlign.Center
                     )
                 }
             }
@@ -467,9 +627,9 @@ class MainActivity : ComponentActivity() {
             ),
             modifier = Modifier
                 .fillMaxWidth()
-                .height(52.dp)
+                .height(if (filled) 60.dp else 52.dp)
         ) {
-            Text(label, fontSize = 15.sp, fontWeight = FontWeight.Medium)
+            Text(label, fontSize = if (filled) 18.sp else 15.sp, fontWeight = FontWeight.SemiBold)
         }
     }
 
@@ -478,9 +638,13 @@ class MainActivity : ComponentActivity() {
         val CARD = Color(0xFF171719)
         val PILL = Color(0xFF262629)
         val WARN = Color(0xFF2E2413)
+        val CHIP = Color(0xFF3A2E1C)
+        val RULE = Color(0xFF242427)
         val INK = Color(0xFFF2F2F2)
         val MUTED = Color(0xFF8E8E93)
-        val FAINT = Color(0xFF5A5A5F)
         val AMBER = Color(0xFFF0B266)
+
+        /** Sunday first; index i is bit i of [AlarmPrefs.days]. */
+        val DAY_LETTERS = listOf("S", "M", "T", "W", "T", "F", "S")
     }
 }
