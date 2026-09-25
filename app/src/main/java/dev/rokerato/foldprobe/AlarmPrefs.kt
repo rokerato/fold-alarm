@@ -3,7 +3,7 @@ package dev.rokerato.foldprobe
 import android.content.Context
 import java.util.Calendar
 
-/** The single daily alarm, and how the lamp should look when it fires. */
+/** The one alarm, the days it repeats on, and how the lamp should look when it fires. */
 class AlarmPrefs(context: Context) {
 
     private val prefs = context.getSharedPreferences("fold_alarm", Context.MODE_PRIVATE)
@@ -19,6 +19,20 @@ class AlarmPrefs(context: Context) {
     var enabled: Boolean
         get() = prefs.getBoolean(KEY_ENABLED, false)
         set(value) = prefs.edit().putBoolean(KEY_ENABLED, value).apply()
+
+    /**
+     * The days the alarm repeats on, one bit per [Calendar.DAY_OF_WEEK]: bit 0 is
+     * Sunday, bit 6 Saturday. Every day by default, which is how the alarm behaved
+     * before days could be chosen. No days at all means ring once, then switch off.
+     */
+    var days: Int
+        get() = prefs.getInt(KEY_DAYS, EVERY_DAY)
+        set(value) = prefs.edit().putInt(KEY_DAYS, value and EVERY_DAY).apply()
+
+    fun ringsOn(dayOfWeek: Int): Boolean = days and (1 shl (dayOfWeek - 1)) != 0
+
+    val repeats: Boolean
+        get() = days != 0
 
     var snoozeMinutes: Int
         get() = prefs.getInt(KEY_SNOOZE, 9)
@@ -36,9 +50,9 @@ class AlarmPrefs(context: Context) {
 
     // ---- standby ------------------------------------------------------------
 
-    /** 0 thin, 1 light, 2 regular, 3 medium. Thin reads best, and wears least. */
+    /** 0 thin, 1 light, 2 regular. Thin reads best, and wears least. */
     var clockWeight: Int
-        get() = prefs.getInt(KEY_WEIGHT, 0)
+        get() = prefs.getInt(KEY_WEIGHT, 0).coerceIn(0, 2)
         set(value) = prefs.edit().putInt(KEY_WEIGHT, value).apply()
 
     /** Dim the clock and tint it red once the room goes dark. */
@@ -91,7 +105,10 @@ class AlarmPrefs(context: Context) {
         get() = prefs.getLong(KEY_NEXT, 0L)
         set(value) = prefs.edit().putLong(KEY_NEXT, value).apply()
 
-    /** The next time the wall clock next shows [hour]:[minute], today or tomorrow. */
+    /**
+     * The next time the wall clock shows [hour]:[minute] on a day the alarm repeats
+     * on -- or on any day, when it repeats on none and is ringing just once.
+     */
     fun nextOccurrence(now: Long = System.currentTimeMillis()): Long {
         val calendar = Calendar.getInstance().apply {
             timeInMillis = now
@@ -100,27 +117,33 @@ class AlarmPrefs(context: Context) {
             set(Calendar.SECOND, 0)
             set(Calendar.MILLISECOND, 0)
         }
-        if (calendar.timeInMillis <= now) {
+        if (calendar.timeInMillis <= now) calendar.add(Calendar.DAY_OF_YEAR, 1)
+        if (!repeats) return calendar.timeInMillis
+        repeat(7) {
+            if (ringsOn(calendar.get(Calendar.DAY_OF_WEEK))) return calendar.timeInMillis
             calendar.add(Calendar.DAY_OF_YEAR, 1)
         }
         return calendar.timeInMillis
     }
 
-    private companion object {
-        const val KEY_HOUR = "hour"
-        const val KEY_MINUTE = "minute"
-        const val KEY_ENABLED = "enabled"
-        const val KEY_SNOOZE = "snooze_minutes"
-        const val KEY_BRIGHTNESS = "lamp_brightness"
-        const val KEY_WARMTH = "lamp_warmth"
-        const val KEY_NEXT = "next_trigger"
-        const val KEY_WEIGHT = "clock_weight"
-        const val KEY_NIGHT_TINT = "night_tint"
-        const val KEY_SUNRISE_MODE = "sunrise_mode"
-        const val KEY_SUNRISE_MINUTES = "sunrise_minutes"
-        const val KEY_GLOW_SWAPPED = "glow_swapped"
-        const val KEY_DIAGNOSTICS = "show_diagnostics"
-        const val KEY_NIGHT_BLANK = "night_blank"
-        const val KEY_NIGHT_BLANK_MINUTES = "night_blank_minutes"
+    companion object {
+        const val EVERY_DAY = 0b111_1111
+
+        private const val KEY_DAYS = "days"
+        private const val KEY_HOUR = "hour"
+        private const val KEY_MINUTE = "minute"
+        private const val KEY_ENABLED = "enabled"
+        private const val KEY_SNOOZE = "snooze_minutes"
+        private const val KEY_BRIGHTNESS = "lamp_brightness"
+        private const val KEY_WARMTH = "lamp_warmth"
+        private const val KEY_NEXT = "next_trigger"
+        private const val KEY_WEIGHT = "clock_weight"
+        private const val KEY_NIGHT_TINT = "night_tint"
+        private const val KEY_SUNRISE_MODE = "sunrise_mode"
+        private const val KEY_SUNRISE_MINUTES = "sunrise_minutes"
+        private const val KEY_GLOW_SWAPPED = "glow_swapped"
+        private const val KEY_DIAGNOSTICS = "show_diagnostics"
+        private const val KEY_NIGHT_BLANK = "night_blank"
+        private const val KEY_NIGHT_BLANK_MINUTES = "night_blank_minutes"
     }
 }

@@ -65,15 +65,32 @@ becomes the clock. Entering is manual on purpose — watching posture in the bac
 all day would cost more battery than the feature is worth. Leave with the small x on
 the cover screen, or the back gesture on the inner one.
 
-Standby is a state machine, not a set of screens: the clock never moves between
-states, only its weight, colour and company change, and every transition cross-fades.
+Standby is a state machine, not a set of screens: through the night the clock never
+moves, only its weight, colour and company change, and every transition cross-fades.
+Ringing is the one state that earns its own layout — the time steps aside for two
+buttons sized for a thumb that is still asleep.
 
 | State | Cover screen | Inner screen |
 | --- | --- | --- |
-| **Clock** (room lit) | Time, date, next alarm | Black |
+| **Clock** (room lit) | Time; date and next alarm on one line | Black |
 | **Night** (room dark) | Time only, dim red, thin, drifting | Black |
+| **Night, tapped** | Brighter red; next alarm and how far off | Black |
 | **Sunrise** (before the alarm) | Unchanged | One half ramps up |
-| **Ringing** | Time, stop, snooze | Glow at full |
+| **Ringing** | Time beside a large snooze and a smaller stop | Glow at full |
+
+**Snooze is the large button.** Hit half asleep, the bigger target should be the one
+whose mistake costs nine minutes rather than the morning. It says when it will ring
+again ("until 6:39").
+
+The cover screen is set in **Jost**, a geometric sans in the Futura line, bundled as
+one variable font (SIL OFL, licence beside it in `assets/fonts`). Its figures stay
+calm and legible down to a hairline weight, and are set tabular so the clock does not
+shift sideways as its digits change. The settings screen keeps the phone's own font,
+so it sits naturally in One UI.
+
+The lit half of the inner screen is brightest a little towards the hinge and falls
+away to its outer edges — light from a lamp rather than a lit panel, with no hard line
+at the hinge.
 
 Night is entered from the ambient light sensor, with different thresholds each way
 and a four-second settle, so a room hovering at the boundary does not flicker and a
@@ -119,7 +136,9 @@ carried by the colour that is emitted, so black is already off at any brightness
 3. **Ring now (preview)** fires it immediately — no need to wait until morning
 4. Tent the phone to see both screens
 
-Snooze length, lamp brightness and lamp warmth are adjustable. **Diagnostics** opens
+The alarm repeats on the days chosen, Sunday first; with no days chosen it rings once
+and switches itself off. Snooze length, lamp brightness and lamp warmth are
+adjustable. **Diagnostics** opens
 the original capability probe.
 
 ## Building
